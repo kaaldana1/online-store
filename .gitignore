@@ -1,0 +1,4 @@
+data/
+bot/.env
+__pycache__/
+*.db

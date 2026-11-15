@@ -1,0 +1,146 @@
+# Platform fee table, read by pricing/fees.py.
+# Researched 2026-11-11. Each platform has a `confidence` field:
+#   "official"  = read on the platform's own help pages
+#   "secondary" = official page blocked bots; figures from cross-lister blogs. Verify in the app.
+# All percentages are written as decimals (0.136 = 13.6%).
+# When a platform changes its fees, edit this file. The pricing script picks it up automatically.
+
+[meta]
+researched = "2026-11-11"
+default_sales_tax_rate = 0.08   # rough guess for eBay fees charged on tax; buyer location varies
+
+# ---------------------------------------------------------------- eBay
+[ebay]
+name = "eBay"
+priority = 1
+enabled = true
+confidence = "official"
+source = "https://www.ebay.com/help/selling/fees-credits-invoices/selling-fees?id=4822"
+automation = "api"              # can post, revise, end, message, and handle offers via the official API
+# The final value fee is charged on item + shipping + sales tax.
+fee_base = "item_shipping_tax"
+per_order_fee_small = 0.30      # order total <= $10
+per_order_fee_large = 0.40      # order total >  $10
+per_order_threshold = 10.00
+free_listings_per_month = 250
+insertion_fee = 0.35            # each listing past the free 250 (charged again on GTC monthly renewals)
+
+# Category tiers: rate up to `cap`, then `rate_above` on the remainder.
+[ebay.categories.default]           # "most categories" (includes antiques and most collectibles)
+rate = 0.136
+cap = 7500
+rate_above = 0.0235
+
+[ebay.categories.jewelry]           # Jewelry & Watches (not watches)
+rate = 0.15
+cap = 5000
+rate_above = 0.09
+
+[ebay.categories.watches]           # Watches, Parts & Accessories (simplified: 6.5% from $1k-7.5k)
+rate = 0.15
+cap = 1000
+rate_above = 0.065
+
+[ebay.categories.womens_bags]
+rate = 0.15
+cap = 2000
+rate_above = 0.09
+
+[ebay.categories.books_media]
+rate = 0.153
+cap = 7500
+rate_above = 0.0235
+
+[ebay.categories.coins]             # Coins & Paper Money (not bullion)
+rate = 0.1325
+cap = 7500
+rate_above = 0.0235
+
+[ebay.categories.bullion]           # possibly relevant for sterling silver bullion pieces
+rate = 0.136
+cap = 7500
+rate_above = 0.07
+
+# Promoted Listings (general): 2–100% of the total sale, charged only if the item sells
+# within 30 days of an ad click. Kept at 0 by default; health checker may propose it.
+[ebay.promoted]
+default_rate = 0.0
+min_rate = 0.02
+
+# eBay Store subscription notes (not applied by default; a Basic store lowers most FVFs).
+# Starter $4.95/mo yearly ($7.95 monthly): same FVFs as no store.
+# Basic $21.95/mo yearly ($27.95 monthly): most categories 12.7%, jewelry 13% (7% over $5k),
+#   1,000 free fixed-price listings. Worth it at roughly 150+ items/month.
+
+# ---------------------------------------------------------------- Facebook Marketplace
+[facebook]
+name = "Facebook Marketplace"
+priority = 1
+enabled = true
+confidence = "secondary"        # fees from vendor blogs; shipping/jewelry rules checked in-app by owner
+source = "https://www.voolist.com/blog/facebook-marketplace-fees-2026"
+automation = "manual"           # no posting/messaging API for individual sellers; bot prepares copy-paste packets
+fee_base = "item"               # fee is on item price only, not shipping
+shipping_enabled = false        # owner decision 2026-11-15: local pickup only (FB shipping is pricier/more complex)
+local_pickup_rate = 0.0         # local pickup is free
+shipped_rate = 0.05             # includes payment processing
+shipped_min_fee = 0.40          # flat fee for shipped orders of $8 or less
+shipped_min_threshold = 8.00
+notes = [
+  "Payout ~1-5 business days after delivery confirmation (vendor-reported).",
+  "Shipping is optional on FB; we use LOCAL PICKUP ONLY (checked in-app 2026-11-15).",
+  "No jewelry-specific rules found in-app (checked 2026-11-15).",
+]
+
+[facebook.categories.default]
+rate = 0.05
+cap = 1e12
+rate_above = 0.05
+
+# ---------------------------------------------------------------- Poshmark
+[poshmark]
+name = "Poshmark"
+priority = 1
+enabled = true
+confidence = "secondary"        # Poshmark's fee page blocks bots; two vendor blogs agree on fees
+source = "https://blog.vendoo.co/everything-you-need-to-know-about-poshmark-selling-fees"
+automation = "manual"           # no public API; ToS bans bots for sharing/relisting/liking
+fee_base = "item"
+flat_fee_under = 2.95           # sales under $15
+flat_fee_threshold = 15.00
+rate = 0.20                     # sales $15 and up
+buyer_pays_shipping = true
+label_max_lb = 5                # USPS prepaid label covers up to 5 lb
+label_price_buyer = 6.49        # checked in-app by owner 2026-11-15
+# Heavier packages add a surcharge. Assumed to come out of the SELLER's earnings
+# (that's how Poshmark's weight upgrade has worked); confirm on the first heavy sale.
+overweight = [
+  { max_lb = 10.0,  surcharge = 5.00 },    # 5.01 – 10 lb
+  { max_lb = 1e12,  surcharge = 10.00 },   # 10.01 lb and up
+]
+notes = [
+  "Sales are final; buyer can cancel within 3 hours.",
+  "Offers are binding once accepted. 'Offer to likers' discounts come out of seller earnings.",
+  "Counterfeit = order cancelled, no payout. Photograph hallmarks on sterling and jewelry.",
+  "Sharing and relisting must be done by a human (Community Guidelines: no unauthorized automation).",
+]
+
+[poshmark.categories.default]
+rate = 0.20
+cap = 1e12
+rate_above = 0.20
+
+# ---------------------------------------------------------------- later
+[mercari]
+name = "Mercari"
+priority = 2
+enabled = false
+confidence = "todo"
+automation = "manual"
+
+[depop]
+name = "Depop"
+priority = 2
+enabled = false
+confidence = "todo"
+automation = "manual"

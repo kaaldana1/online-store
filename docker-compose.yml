@@ -1,0 +1,11 @@
+services:
+  storebot:
+    build: .
+    container_name: storebot
+    restart: unless-stopped        # comes back after crashes and Docker restarts
+    env_file: bot/.env             # DISCORD_TOKEN, GUILD_ID, channel IDs
+    volumes:
+      - ./data:/app/data           # database lives on the host: store-system/data/store.db
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
