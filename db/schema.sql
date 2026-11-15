@@ -219,3 +219,7 @@ CREATE VIEW IF NOT EXISTS listings_per_day AS
 SELECT date(posted_at) AS day, platform_id, COUNT(*) AS n
 FROM listings WHERE posted_at IS NOT NULL
 GROUP BY day, platform_id ORDER BY day DESC;
+
+-- ------------------------------------------------------------ step 3: finder index
+-- Rebuilt from items/listings/appraisals before each search (cheap at thrift-store scale).
+CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(item_id UNINDEXED, body, tokenize = 'porter unicode61');

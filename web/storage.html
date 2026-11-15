@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Storage Map</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1f2328; --muted: #6a6f76; --line: #d9d6cf;
+  --bin: #fbfaf7; --bin-line: #9a958a; --accent: #2f6fdf; --accent-soft: #dbe7fb;
+  --hit: #f2b632; --hit-soft: #fff1cc; --danger: #c43d3d; --grid: #ebe8e1;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17191c; --panel: #202327; --ink: #e8e6e1; --muted: #9aa0a6; --line: #34383d;
+    --bin: #262a2f; --bin-line: #6b7078; --accent: #6ea0ff; --accent-soft: #23324d;
+    --hit: #f2b632; --hit-soft: #4a3a12; --danger: #ff7a7a; --grid: #23262a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 16px;
+  border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 18px; margin: 0 8px 0 0; }
+.search { flex: 1 1 320px; display: flex; gap: 6px; align-items: center; }
+.search input[type=search] { flex: 1; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--ink); font-size: 15px; }
+button, select { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.on { background: var(--accent-soft); border-color: var(--accent); }
+button.danger { color: var(--danger); }
+label.chk { display: flex; gap: 4px; align-items: center; color: var(--muted); font-size: 13px; white-space: nowrap; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; padding: 16px; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+#mapWrap { position: relative; }
+#map { width: 100%; height: auto; display: block; touch-action: none; user-select: none; }
+#map .gridline { stroke: var(--grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.bin rect.body { fill: var(--bin); stroke: var(--bin-line); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.bin.selected rect.body { stroke: var(--accent); stroke-width: 3; fill: var(--accent-soft); }
+.bin.drop rect.body { stroke: var(--accent); stroke-width: 4; fill: var(--accent-soft); }
+.bin.hit rect.body { stroke: var(--hit); stroke-width: 5; fill: var(--hit-soft); animation: pulse 1s ease-in-out 4; }
+@keyframes pulse { 50% { opacity: .55; } }
+.bin text { fill: var(--ink); pointer-events: none; }
+.bin .num { font-weight: 700; font-size: 28px; }
+.bin .lbl { font-size: 15px; fill: var(--muted); }
+.bin .cnt { font-size: 14px; fill: var(--muted); }
+.bin .handle { fill: var(--accent); cursor: nwse-resize; }
+.editing .bin rect.body { cursor: move; stroke-dasharray: 6 4; }
+.hint { color: var(--muted); font-size: 13px; margin: 8px 2px 0; }
+aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+aside h2 { font-size: 15px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; }
+.list { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
+.it { display: grid; grid-template-columns: 48px 1fr; gap: 8px; align-items: center; padding: 6px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); cursor: grab; }
+.it img, .it .noimg { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; background: var(--grid); }
+.it .t { font-size: 13px; overflow: hidden; }
+.it .t b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
+.it .t span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.it select { margin-top: 4px; padding: 3px 6px; font-size: 12px; max-width: 100%; }
+.it.res { cursor: pointer; }
+.it .why { color: var(--muted); font-size: 12px; white-space: normal; }
+.tag { display: inline-block; padding: 1px 6px; border-radius: 6px; background: var(--hit-soft); font-size: 12px; font-weight: 600; }
+.empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
+#toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+  padding: 10px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+#toast.show { opacity: .95; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🗄️ Storage map</h1>
+  <form class="search" id="searchForm">
+    <input type="search" id="q" placeholder="Find an item… e.g. golden chalice with vine engravings" autocomplete="off">
+    <label class="chk" title="Let AI pick the best matches (fractions of a cent)"><input type="checkbox" id="smart"> Smart</label>
+    <button class="primary" type="submit">Find</button>
+  </form>
+  <button id="editBtn" type="button">✏️ Edit layout</button>
+  <button id="addBtn" type="button" hidden>＋ Add bin</button>
+</header>
+
+<main>
+  <section class="card" id="mapWrap">
+    <svg id="map" viewBox="0 0 1200 700" aria-label="Storage layout"></svg>
+    <p class="hint" id="hint">Drag an item from the right (or a photo from your computer) onto a bin. Tap a bin to see what's inside.</p>
+  </section>
+
+  <aside>
+    <section class="card" id="resultsCard" hidden>
+      <h2>Search results <button type="button" id="clearRes">✕</button></h2>
+      <div class="list" id="results"></div>
+    </section>
+    <section class="card" id="binCard" hidden>
+      <h2><span id="binTitle">Bin</span> <span>
+        <button type="button" id="renameBin" hidden>Rename</button>
+        <button type="button" class="danger" id="deleteBin" hidden>Delete</button></span></h2>
+      <div class="list" id="binItems"></div>
+    </section>
+    <section class="card">
+      <h2>Not in a bin yet <span class="tag" id="trayCount">0</span></h2>
+      <div class="list" id="tray"></div>
+    </section>
+  </aside>
+</main>
+<div id="toast"></div>
+
+<script>
+const CELL = 50, COLS = 24, ROWS = 14;
+const svg = document.getElementById('map');
+let S = { bins: [], items: [] }, editing = false, selected = null, hits = new Set();
+let drag = null;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600); }
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body instanceof FormData) opt.body = body;
+  else if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt); const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+async function load() { S = await api('GET', '/api/state'); render(); }
+
+// ---------------------------------------------------------------- map
+function svgPoint(evt) { const p = svg.createSVGPoint(); p.x = evt.clientX; p.y = evt.clientY;
+  return p.matrixTransform(svg.getScreenCTM().inverse()); }
+function binAt(evt) { const p = svgPoint(evt);
+  return S.bins.slice().reverse().find(b => p.x >= b.x*CELL && p.x <= (b.x+b.w)*CELL && p.y >= b.y*CELL && p.y <= (b.y+b.h)*CELL); }
+function itemsIn(id) { return S.items.filter(i => i.bin_id === id); }
+
+function render() {
+  const ns = 'http://www.w3.org/2000/svg';
+  svg.innerHTML = '';
+  svg.classList.toggle('editing', editing);
+  // Viewing: zoom to the bins actually drawn (readable on phones). Editing: show the whole grid.
+  const vw = editing || !S.bins.length ? COLS : Math.min(COLS, Math.max(8, ...S.bins.map(b => b.x + b.w)));
+  const vh = editing || !S.bins.length ? ROWS : Math.min(ROWS, Math.max(4, ...S.bins.map(b => b.y + b.h)));
+  svg.setAttribute('viewBox', `0 0 ${vw*CELL} ${vh*CELL}`);
+  const u = (vw * CELL) / (svg.clientWidth || 800);   // svg units per screen pixel
+  for (let c = 0; c <= vw; c++) svg.insertAdjacentHTML('beforeend', `<line class="gridline" x1="${c*CELL}" y1="0" x2="${c*CELL}" y2="${vh*CELL}"/>`);
+  for (let r = 0; r <= vh; r++) svg.insertAdjacentHTML('beforeend', `<line class="gridline" x1="0" y1="${r*CELL}" x2="${vw*CELL}" y2="${r*CELL}"/>`);
+  for (const b of S.bins) {
+    const g = document.createElementNS(ns, 'g');
+    g.classList.add('bin'); g.dataset.id = b.id;
+    if (selected === b.id) g.classList.add('selected');
+    if (hits.has(b.id)) g.classList.add('hit');
+    const x = b.x*CELL, y = b.y*CELL, w = b.w*CELL, h = b.h*CELL, n = itemsIn(b.id).length;
+    // text is sized in screen pixels, so it stays readable at any zoom
+    const fit = (str, px) => { const max = Math.floor((w / u - 20) / (px * 0.56)); return str.length > max ? str.slice(0, Math.max(1, max - 1)) + '…' : str; };
+    const cnt = `${n} item${n===1?'':'s'}`;
+    g.innerHTML = `<rect class="body" x="${x+3*u}" y="${y+3*u}" width="${w-6*u}" height="${h-6*u}" rx="${6*u}"/>
+      <text class="num" x="${x+10*u}" y="${y+28*u}" style="font-size:${22*u}px">${b.id}</text>
+      ${h / u > 56 ? `<text class="lbl" x="${x+10*u}" y="${y+46*u}" style="font-size:${13*u}px">${esc(fit(b.label || '', 13))}</text>` : ''}
+      ${h / u > 40 ? `<text class="cnt" x="${x+w-10*u}" y="${y+h-10*u}" text-anchor="end" style="font-size:${12*u}px">${esc(fit(cnt, 12))}</text>` : ''}
+      ${editing ? `<rect class="handle" x="${x+w-22*u}" y="${y+h-22*u}" width="${16*u}" height="${16*u}" rx="${3*u}"/>` : ''}`;
+    svg.appendChild(g);
+  }
+  renderTray(); if (selected != null) renderBin();
+}
+
+svg.addEventListener('pointerdown', e => {
+  const g = e.target.closest('.bin'); if (!g) return;
+  const b = S.bins.find(x => x.id == g.dataset.id);
+  if (!editing) { selectBin(b.id); return; }
+  const p = svgPoint(e);
+  drag = { b, mode: e.target.classList.contains('handle') ? 'resize' : 'move', px: p.x, py: p.y, orig: { ...b } };
+  svg.setPointerCapture(e.pointerId); selectBin(b.id);
+});
+svg.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const p = svgPoint(e), dx = Math.round((p.x - drag.px) / CELL), dy = Math.round((p.y - drag.py) / CELL), b = drag.b;
+  const c = { x: b.x, y: b.y, w: b.w, h: b.h };
+  if (drag.mode === 'move') {
+    c.x = Math.min(Math.max(0, drag.orig.x + dx), COLS - b.w); c.y = Math.min(Math.max(0, drag.orig.y + dy), ROWS - b.h);
+  } else {
+    c.w = Math.min(Math.max(1, drag.orig.w + dx), COLS - b.x); c.h = Math.min(Math.max(1, drag.orig.h + dy), ROWS - b.y);
+  }
+  // bins can't overlap: keep the last position that fits
+  const clash = S.bins.some(o => o !== b && c.x < o.x + o.w && c.x + c.w > o.x && c.y < o.y + o.h && c.y + c.h > o.y);
+  if (clash || (c.x === b.x && c.y === b.y && c.w === b.w && c.h === b.h)) return;
+  Object.assign(b, c);
+  render();
+});
+svg.addEventListener('pointerup', async () => {
+  if (!drag) return; const b = drag.b, o = drag.orig; drag = null;
+  if (b.x === o.x && b.y === o.y && b.w === o.w && b.h === o.h) return;
+  try { await api('PUT', `/api/bins/${b.id}`, { x: b.x, y: b.y, w: b.w, h: b.h }); }
+  catch (err) { toast(err.message); load(); }
+});
+
+// drop items / photo files onto bins
+svg.addEventListener('dragover', e => { e.preventDefault();
+  const b = binAt(e); svg.querySelectorAll('.bin').forEach(g => g.classList.toggle('drop', b && g.dataset.id == b.id)); });
+svg.addEventListener('dragleave', () => svg.querySelectorAll('.bin.drop').forEach(g => g.classList.remove('drop')));
+svg.addEventListener('drop', async e => {
+  e.preventDefault(); const b = binAt(e);
+  svg.querySelectorAll('.bin.drop').forEach(g => g.classList.remove('drop'));
+  if (!b) { toast('Drop it onto a bin'); return; }
+  const id = e.dataTransfer.getData('text/item-id');
+  if (id) { await moveItem(+id, b.id); return; }
+  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'));
+  for (const f of files) {
+    const name = prompt(`Name for this item (going into bin ${b.id}):`, f.name.replace(/\.[^.]+$/, ''));
+    if (name === null) continue;
+    const fd = new FormData(); fd.append('photo', f); fd.append('bin_id', b.id); fd.append('name', name);
+    try { const it = await api('POST', '/api/items', fd); toast(`${it.sku} added to bin ${b.id}`); } catch (err) { toast(err.message); }
+  }
+  load();
+});
+
+async function moveItem(itemId, binId) {
+  try { await api('POST', `/api/items/${itemId}/bin`, { bin_id: binId });
+    const it = S.items.find(i => i.id === itemId); if (it) it.bin_id = binId;
+    toast(binId == null ? `${it?.sku} removed from bin` : `${it?.sku} → bin ${binId}`); render();
+  } catch (err) { toast(err.message); }
+}
+
+// ---------------------------------------------------------------- side panels
+function itemCard(i, { draggable = true, extra = '' } = {}) {
+  const img = i.photo ? `<img src="${i.photo}" alt="" loading="lazy">` : `<div class="noimg"></div>`;
+  const opts = ['<option value="">Move to bin…</option>', '<option value="none">— no bin —</option>',
+    ...S.bins.map(b => `<option value="${b.id}">Bin ${b.id}${b.label ? ' · ' + esc(b.label) : ''}</option>`)].join('');
+  return `<div class="it" draggable="${draggable}" data-id="${i.id}">${img}
+    <div class="t"><b>${esc(i.sku)}${i.bin_id != null ? ' · bin ' + i.bin_id : ''}</b><span title="${esc(i.name)}">${esc(i.name)}</span>
+    ${extra}<select data-move="${i.id}">${opts}</select></div></div>`;
+}
+function wireCards(root) {
+  root.querySelectorAll('.it[draggable=true]').forEach(el => el.addEventListener('dragstart', e => {
+    e.dataTransfer.setData('text/item-id', el.dataset.id); e.dataTransfer.effectAllowed = 'move'; }));
+  root.querySelectorAll('select[data-move]').forEach(sel => {
+    sel.addEventListener('click', e => e.stopPropagation());
+    sel.addEventListener('change', () => { if (!sel.value) return;
+      moveItem(+sel.dataset.move, sel.value === 'none' ? null : +sel.value); });
+  });
+}
+function renderTray() {
+  const tray = S.items.filter(i => i.bin_id == null);
+  $('trayCount').textContent = tray.length;
+  $('tray').innerHTML = tray.length ? tray.map(i => itemCard(i)).join('') :
+    '<div class="empty">Everything has a home. New items from /newitem show up here until you place them.</div>';
+  wireCards($('tray'));
+}
+function selectBin(id) { selected = id; render(); $('binCard').hidden = false; }
+function renderBin() {
+  const b = S.bins.find(x => x.id === selected); if (!b) { $('binCard').hidden = true; return; }
+  $('binTitle').textContent = `Bin ${b.id}${b.label ? ' · ' + b.label : ''}`;
+  $('renameBin').hidden = $('deleteBin').hidden = !editing;
+  const items = itemsIn(b.id);
+  $('binItems').innerHTML = items.length ? items.map(i => itemCard(i)).join('') : '<div class="empty">Empty.</div>';
+  wireCards($('binItems'));
+}
+
+// ---------------------------------------------------------------- edit mode
+$('editBtn').onclick = () => { editing = !editing; $('editBtn').classList.toggle('on', editing);
+  $('editBtn').textContent = editing ? '✔ Done editing' : '✏️ Edit layout'; $('addBtn').hidden = !editing;
+  $('hint').textContent = editing ? 'Drag bins to move them, drag the blue corner to resize. Select a bin to rename or delete it.'
+    : "Drag an item from the right (or a photo from your computer) onto a bin. Tap a bin to see what's inside.";
+  render(); };
+$('addBtn').onclick = async () => {
+  const label = prompt('Label for the new bin (optional, e.g. "Top shelf left"):', '');
+  if (label === null) return;
+  // first free spot, scanning rows
+  let spot = { x: 0, y: 0 };
+  outer: for (let y = 0; y <= ROWS - 2; y++) for (let x = 0; x <= COLS - 2; x++) {
+    if (!S.bins.some(b => x < b.x + b.w && x + 2 > b.x && y < b.y + b.h && y + 2 > b.y)) { spot = { x, y }; break outer; } }
+  try { const b = await api('POST', '/api/bins', { ...spot, w: 2, h: 2, label }); S.bins.push(b); selectBin(b.id); toast(`Bin ${b.id} added`); }
+  catch (err) { toast(err.message); }
+};
+$('renameBin').onclick = async () => { const b = S.bins.find(x => x.id === selected);
+  const label = prompt(`New label for bin ${b.id}:`, b.label || ''); if (label === null) return;
+  await api('PUT', `/api/bins/${b.id}`, { label }); b.label = label; render(); };
+$('deleteBin').onclick = async () => { const b = S.bins.find(x => x.id === selected); const n = itemsIn(b.id).length;
+  if (!confirm(n ? `Bin ${b.id} has ${n} item(s). Delete it and move them to "Not in a bin yet"?` : `Delete bin ${b.id}?`)) return;
+  await api('DELETE', `/api/bins/${b.id}?force=1`); selected = null; $('binCard').hidden = true; load(); };
+
+// ---------------------------------------------------------------- search
+$('searchForm').onsubmit = async e => {
+  e.preventDefault(); const q = $('q').value.trim(); if (!q) return;
+  $('resultsCard').hidden = false; $('results').innerHTML = '<div class="empty">Searching…</div>';
+  try {
+    const res = await api('GET', `/api/find?q=${encodeURIComponent(q)}${$('smart').checked ? '&smart=1' : ''}`);
+    hits = new Set(res.filter(r => r.bin_id != null).map(r => r.bin_id).slice(0, 3));
+    $('results').innerHTML = res.length ? res.map(r => {
+      const extra = `<span class="why">${r.bin_id != null ? `<span class="tag">Bin ${r.bin_id}</span> ` : 'not in a bin · '}${esc(r.why || '')}${r.confidence ? ' (' + r.confidence + ')' : ''}</span>`;
+      return itemCard(r, { draggable: false, extra }).replace('class="it"', 'class="it res"'); }).join('')
+      : '<div class="empty">No matches. Try fewer or different words, or tick Smart.</div>';
+    $('results').querySelectorAll('.it.res').forEach(el => el.addEventListener('click', () => {
+      const r = res.find(x => x.id == el.dataset.id); if (r.bin_id == null) { toast(`${r.sku} isn't in a bin yet`); return; }
+      hits = new Set([r.bin_id]); selectBin(r.bin_id); svg.scrollIntoView({ behavior: 'smooth', block: 'center' }); }));
+    wireCards($('results'));
+    render();
+  } catch (err) { $('results').innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+};
+$('clearRes').onclick = () => { $('resultsCard').hidden = true; hits.clear(); render(); };
+
+window.addEventListener('resize', () => { clearTimeout(render.t); render.t = setTimeout(render, 150); });
+load().then(() => {
+  const h = +new URLSearchParams(location.search).get('highlight');
+  if (h && S.bins.some(b => b.id === h)) { hits = new Set([h]); selectBin(h); }
+});
+</script>
+</body>
+</html>

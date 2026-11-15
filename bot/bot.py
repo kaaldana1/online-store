@@ -14,6 +14,7 @@ posts, prices, or replies on a platform by itself.
 Env vars (put them in bot/.env, see .env.example):
   DISCORD_TOKEN, GUILD_ID, APPROVALS_CHANNEL_ID, ALERTS_CHANNEL_ID, ANTHROPIC_API_KEY
 Step 2 commands (/newitem, /today, /spend) live in bot/listing_ui.py.
+Step 3: /find, /bin, /move, /sold in bot/storage_cmds.py; storage map web page in bot/web.py.
 """
 from __future__ import annotations
 
@@ -33,6 +34,8 @@ sys.path.insert(0, str(ROOT / "db"))
 import fees as feecalc  # noqa: E402
 from init_db import connect, init  # noqa: E402
 import listing_ui  # noqa: E402  (step 2: /newitem, prices, packets)
+import storage_cmds  # noqa: E402  (step 3: /find, /bin, /move, /sold)
+import web  # noqa: E402  (step 3: storage map at http://localhost:8080)
 
 
 def _load_env() -> None:
@@ -143,6 +146,10 @@ class StoreBot(discord.Client):
         else:
             await self.tree.sync()
         self.watch.start()
+        try:
+            self.web = await web.start(db, port=int(os.environ.get("WEB_PORT", 8080)))
+        except OSError as e:
+            print(f"Storage map NOT started: {e}")
 
     async def on_ready(self):
         print(f"Logged in as {self.user} | approvals channel: "
@@ -176,13 +183,15 @@ class StoreBot(discord.Client):
             SELECT d.id, d.status, d.last_error, l.platform_id, l.url, i.sku, i.name, p.name AS pname
             FROM delist_tasks d JOIN listings l ON l.id=d.listing_id
             JOIN items i ON i.id=l.item_id JOIN platforms p ON p.id=l.platform_id
-            WHERE d.status IN ('failed','manual_required')""").fetchall()
+            WHERE d.status IN ('failed','manual_required')
+               OR (d.status = 'pending' AND d.created_at < datetime('now', '-10 minutes'))""").fetchall()
         for r in rows:
             last = self.last_ping.get(r["id"])
             if last and now - last < REPING_EVERY:
                 continue
-            why = "needs a manual delist (no API)" if r["status"] == "manual_required" \
-                else f"automatic delist FAILED: {r['last_error'] or 'unknown error'}"
+            why = {"manual_required": "needs a manual delist",
+                   "pending": "automatic delist hasn't happened after 10 minutes"}.get(
+                       r["status"], f"automatic delist FAILED: {r['last_error'] or 'unknown error'}")
             e = discord.Embed(title=f"⚠️ SOLD: remove {r['sku']} from {r['pname']}",
                               description=f"**{r['name'] or r['sku']}** {why}.\n{r['url'] or ''}",
                               color=discord.Color.red())
@@ -194,6 +203,7 @@ class StoreBot(discord.Client):
 
 bot = StoreBot()
 listing_ui.register(bot, bot.tree, db, HOOKS)
+storage_cmds.register(bot, bot.tree, db)
 
 
 @bot.tree.command(description="Compare fees and profit across platforms for a price")

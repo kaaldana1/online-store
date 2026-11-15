@@ -147,3 +147,52 @@ def identify(photos: list[bytes], notes: str, db=None) -> dict:
 def _fail(db, run: int, err: str) -> None:
     db.execute("UPDATE agent_runs SET status='failed', error=?, finished_at=datetime('now') WHERE id=?", (err, run))
     db.commit()
+
+
+# ------------------------------------------------------------ step 3: finder re-ranking
+RANK_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["matches"],
+    "properties": {"matches": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False,
+        "required": ["item_id", "confidence", "reason"],
+        "properties": {
+            "item_id": {"type": "integer"},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "reason": {"type": "string", "description": "a few words, e.g. 'gold-tone goblet, vine pattern'"},
+        }}}},
+}
+
+
+def rank_matches(query: str, candidates: list[dict], db=None) -> list[dict]:
+    """Given the seller's description and candidate items, return the ones that match, best first."""
+    if db is None:
+        sys.path.insert(0, str(ROOT / "db"))
+        from init_db import connect
+        db = connect()
+    listing = "\n".join(f"[{c['item_id']}] {c['text']}" for c in candidates)
+    run = db.execute("INSERT INTO agent_runs (agent, task, model) VALUES ('finder','rank',?)",
+                     (CFG["ai"]["model"],)).lastrowid
+    db.commit()
+    try:
+        resp = client().messages.create(
+            model=CFG["ai"]["model"],
+            max_tokens=2000,
+            system="You match a reseller's description of an item to her inventory records. Return only items "
+                   "that plausibly match, best first. Treat synonyms and near-descriptions as matches "
+                   "(goblet/chalice, gold-tone/golden). Return an empty list if nothing fits.",
+            messages=[{"role": "user", "content": f"Looking for: {query}\n\nInventory candidates:\n{listing}"}],
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": RANK_SCHEMA}},
+        )
+    except anthropic.APIError as e:
+        _fail(db, run, str(e)[:200])
+        raise RuntimeError("AI search unavailable") from e
+    db.execute("UPDATE agent_runs SET input_tokens=?, output_tokens=?, cost_usd=?, status='ok', "
+               "finished_at=datetime('now') WHERE id=?",
+               (resp.usage.input_tokens, resp.usage.output_tokens, _cost(resp.usage), run))
+    db.commit()
+    if resp.stop_reason != "end_turn":
+        raise RuntimeError(f"AI search stopped: {resp.stop_reason}")
+    text = next(b.text for b in resp.content if b.type == "text")
+    return json.loads(text)["matches"]

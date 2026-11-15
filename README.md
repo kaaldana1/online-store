@@ -11,9 +11,13 @@ bot/listing_ui.py       step 2: /newitem → AI draft → comps → prices → a
 listing/ai.py           one Claude call: identify item from photos, draft titles/description/tags
 listing/pricer.py       market price → list price + lowest offer per platform (rules, no AI)
 listing/config.toml     step 2 knobs: AI model, price multipliers, min profit, label estimates
+bot/web.py              step 3: storage map web server (http://localhost:8080) + its API
+web/storage.html        step 3: the storage map page (bins, drag & drop, finder)
+storage/search.py       step 3: finder (keyword index + optional AI pick)
+bot/storage_cmds.py     step 3: /find, /bin, /move, /sold
 ```
 
-Guides: `SETUP-discord-bot.md` (install), `TESTING.md` (step 1 tests), `STEP2-listing-assistant.md` (step 2 usage, setup, tests).
+Guides: `SETUP-discord-bot.md` (install), `TESTING.md` (step 1 tests), `STEP2-listing-assistant.md` (step 2), `STEP3-storage-map.md` (step 3).
 
 ## Try it (no accounts needed)
 ```bash
