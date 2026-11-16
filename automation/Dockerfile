@@ -19,6 +19,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 xvfb
 COPY automation/ automation/
 
 # data/ (database + screenshots) and browser-profiles/ (your saved login) are mounted from
-# the host by docker-compose.yml. --idle-if-off: if AUTO_DELIST is off, wait quietly instead of
-# exiting, so Docker doesn't restart it over and over.
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1280x900x24", "python", "automation/poshmark.py", "worker", "--idle-if-off"]
+# the host by docker-compose.yml. The start script runs the worker with --idle-if-off: if
+# AUTO_DELIST is off it waits quietly instead of exiting, so Docker doesn't restart it in a loop.
+CMD ["sh", "automation/docker-start.sh"]
