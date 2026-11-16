@@ -44,6 +44,7 @@ BASE = os.environ.get("POSHMARK_BASE", "https://poshmark.com")  # override only 
 # Methods that can change something on the server. Blocked in check mode.
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 LISTING_ID = re.compile(r"([0-9a-f]{24})(?:[/?#]|$)")
+FORM_TIMEOUT_MS = 30000   # how long to wait for the edit form to finish loading
 DELETE_TEXT = re.compile(r"^\s*delete(\s+listing)?\s*$", re.I)
 
 
@@ -104,7 +105,7 @@ def open_browser(pw, block_writes: bool):
 
         def guard(route):
             if route.request.method in WRITE_METHODS:
-                blocked.append(f"{route.request.method} {route.request.url[:80]}")
+                blocked.append(f"{route.request.method} {route.request.url[:200]}")
                 return route.abort()
             return route.continue_()
 
@@ -193,22 +194,36 @@ def cmd_check(url: str | None) -> int:
                 print(msg); alert(f"⚠️ {msg}")
                 return 3
 
-            print("3/3 Looking for the Delete button (it will NOT be clicked)")
+            print("3/3 Waiting for the edit form, then looking for the Delete button (it will NOT be clicked)")
+            try:  # the edit page shows grey placeholders first and fills in a few seconds later
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass  # some pages never go fully quiet; the wait below is what counts
+            candidates = (page.get_by_role("button", name=DELETE_TEXT)
+                          .or_(page.get_by_role("link", name=DELETE_TEXT))
+                          .or_(page.get_by_text(DELETE_TEXT)))
             btn = None
-            for role in ("button", "link"):
-                loc = page.get_by_role(role, name=DELETE_TEXT)
-                if loc.count():
-                    btn = loc.first
-                    break
-            if btn is None:
-                loc = page.get_by_text(DELETE_TEXT)
-                btn = loc.first if loc.count() else None
+            try:
+                candidates.first.wait_for(state="attached", timeout=FORM_TIMEOUT_MS)
+                btn = candidates.first
+            except Exception:
+                btn = None
 
             if btn is None:
                 shot = screenshot(page, "poshmark-no-delete")
-                msg = (f"Poshmark test: could NOT find the Delete button on {edit_url}. "
-                       f"Either the page changed or this listing isn't yours. Screenshot: {shot}")
-                print(msg); alert(f"⚠️ {msg}")
+                blocked = [b for b in getattr(ctx, "blocked_writes", []) if "poshmark" in b]
+                log = SHOTS_DIR / (shot.stem + "-blocked.txt")
+                log.write_text("\n".join(blocked) + "\n", encoding="utf-8")
+                msg = (f"Poshmark test: could NOT find the Delete button on {edit_url} after waiting "
+                       f"{FORM_TIMEOUT_MS // 1000}s. Screenshot: {shot}")
+                print(msg)
+                if blocked:
+                    print(f"\nThe safety guard blocked {len(blocked)} Poshmark request(s) while the page loaded.")
+                    print("If the screenshot still shows grey placeholders, the page may need one of these")
+                    print(f"to load its data. Please send this file: {log}")
+                    for b in blocked[:10]:
+                        print("   ", b)
+                alert(f"⚠️ {msg}")
                 return 3
 
             btn.scroll_into_view_if_needed()
