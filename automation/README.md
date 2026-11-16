@@ -1,94 +1,114 @@
-# Browser automation (step 1: safe Poshmark test)
+# Browser automation: Poshmark auto-delist
 
-This folder will grow into the browser worker that delists sold items on Poshmark, Mercari and
-Depop. The design and the reasoning are in the
-[recommendation doc](https://claude.ai/artifact/1tMahX8ePp9NNmYzCVW8UE).
+When an item sells somewhere else, this removes its Poshmark listing for you. It runs on your
+computer in a visible browser window, using a Poshmark login you save once. The design and
+reasoning are in the [recommendation doc](https://claude.ai/artifact/1tMahX8ePp9NNmYzCVW8UE).
 
-Right now it holds one script, `poshmark_check.py`, which does a **dry run**:
+All commands are in `automation/poshmark.py`. Run them from `~/store-system` with the
+virtual environment on (`source .venv-automation/bin/activate`).
+**Always put links in quotes.** Links often contain `&`, and without quotes the terminal breaks
+the link apart.
 
-1. You log in to Poshmark once in a browser window the script opens. Your password is never
-   saved. Only the browser's login cookies are kept, in `browser-profiles/poshmark/`.
-2. The script opens one of your listings, then its edit page, and finds the **Delete** button.
-3. It draws a red box around the button, takes a screenshot, and closes. **It never clicks
-   anything.**
+| Command | What it does | Changes anything? |
+|---|---|---|
+| `login` | Opens a window so you can log in once | No |
+| `check "<link>"` | Finds the Delete Listing button and draws a red box around it | **No**, it never clicks |
+| `delist "<link>"` | Deletes one listing, then confirms it's gone (asks you to type `DELETE`) | **Yes** |
+| `worker` | Watches the database and delists Poshmark listings of items sold elsewhere | **Yes**, only after a sale |
+| `add-test-listing "<link>"` | Adds a TEST item for a listing, to try the whole flow | Only your database |
 
-**It can't change your account, even by accident.** While `check` runs, the browser blocks every
-request that could save or delete something (POST, PUT, PATCH, DELETE) before it leaves your
-computer. Even if you click something in that window yourself, the request won't go through.
-When the test finishes it prints how many requests the guard blocked. Expect a few, because
-page analytics also send POST requests.
+(`poshmark_check.py` still works too. It's the old name for the same thing.)
 
-The script runs on your PC, not in Docker, because it needs a visible browser window.
+## How a delist works
 
-## Option A: run it in WSL (recommended)
+1. Open the listing, then its edit page, and wait for the form to load.
+2. Click **Delete Listing**, then the **Yes/confirm** button in the popup.
+3. Reload the edit page. **It only counts as done if Poshmark says the listing no longer
+   exists.** If the listing is still there, or the page never loads, that is a failure.
+4. Post the result to `#alerts` with a screenshot: ✅ if it worked, ⚠️ if not.
 
-You need Windows 11, or Windows 10 with the latest WSL, so that Linux apps can open windows.
-If you're unsure, run `wsl --update` in PowerShell first.
+**Safety guard.** A guard inside the browser blocks every request that could change your account.
+It's lifted only for the few seconds between clicking Delete Listing and the confirm button,
+then turned back on before step 3. The script stops and alerts you on a CAPTCHA or a login page.
+It never tries to get past them.
+
+**What happens when something fails.** The worker marks the task failed. The bot then shows it
+in `#alerts` with the usual **Done, I delisted it** button and re-pings every 2 hours. A plain
+error like a timeout gets one retry a minute later. If the worker isn't running at all, the bot
+still alerts after 10 minutes, so a sale can't slip through.
+
+## One-time setup for auto-delist
+
+1. Let your user write to the database. The bot's Docker container creates it as root.
+   ```bash
+   cd ~/store-system && sudo chown -R $USER:$USER data
+   ```
+2. Turn it on. Add this line to `bot/.env`:
+   ```
+   AUTO_DELIST=poshmark
+   ```
+   Then restart the bot so it sees the change: `docker compose up -d --build`
+   (or `docker-compose up -d --build`).
+3. Save the link when you post. **Mark posted** now asks for the listing's link. Paste the
+   Poshmark link there, because without it the worker can't find the listing. You can leave it
+   blank for other sites.
+
+## Test it on the pirate hat (do this first)
+
+This runs the full flow, including the bot, on a listing you don't mind losing.
+
+```bash
+cd ~/store-system && git pull
+source .venv-automation/bin/activate
+
+# 1. make sure the login still works (safe, no clicking)
+python automation/poshmark.py check "https://poshmark.com/listing/Pirate-Hat-6afa61daa6935870035b2652"
+
+# 2. add the hat to the database as a TEST item
+python automation/poshmark.py add-test-listing "https://poshmark.com/listing/Pirate-Hat-6afa61daa6935870035b2652"
+
+# 3. start the worker and leave this window open
+python automation/poshmark.py worker
+```
+
+4. In Discord, fake a sale of the hat on Facebook with `/sold sku:TEST-PM1 platform:facebook price:1`.
+   The bot should reply that it's removing the hat from Poshmark automatically.
+5. Within about a minute, the browser window opens, deletes the hat, checks it's gone, and posts
+   ✅ with a screenshot in `#alerts`. Open the hat's link on your phone to confirm it's gone.
+
+To test only the delete part without the bot, use
+`python automation/poshmark.py delist "<link>"` and type `DELETE` when it asks.
+
+## Day to day
+
+Start the worker whenever the computer is on: `python automation/poshmark.py worker`. Stop it
+with Ctrl+C. While it's off, Poshmark delists fall back to manual alerts after 10 minutes.
+To turn auto-delist off completely, remove `AUTO_DELIST=poshmark` from `bot/.env` and restart
+the bot.
+
+## First-time install
+
+On Linux (ChromeOS Linux, or WSL on Windows 11):
 
 ```bash
 cd ~/store-system
-git pull
-
-# one-time setup (about 2 minutes)
 sudo apt update && sudo apt install -y python3-venv python3-pip
 python3 -m venv .venv-automation
 source .venv-automation/bin/activate
 pip install -r automation/requirements.txt
-python -m playwright install --with-deps chromium      # asks for your sudo password
-
-# log in once (a Chromium window opens)
-python automation/poshmark_check.py login
-
-# the test: paste the link of a listing on YOUR account
-python automation/poshmark_check.py check "https://poshmark.com/listing/..."
+python -m playwright install --with-deps chromium
+python automation/poshmark.py login
 ```
 
-**Always put the link in quotes.** Links copied from ads or the app often have `&` in them,
-and without quotes the terminal splits the link into pieces and runs them in the background.
+On Windows without WSL windows: install Python 3.11+ from python.org, then in PowerShell, from
+the repo folder, run `py -m pip install -r automation\requirements.txt`, then
+`py -m playwright install chromium`. Set
+`$env:BROWSER_PROFILES = "$env:LOCALAPPDATA\storebot-profiles"` in each new window, and run the
+same commands with `py` instead of `python`.
 
-Later runs only need `source .venv-automation/bin/activate`, followed by the `check` line.
-If you leave out the link, the script uses the newest live Poshmark listing in `data/store.db`
-that has a URL.
+## Rules this folder follows
 
-If no window appears, run `wsl --update` in PowerShell, restart WSL with `wsl --shutdown`, and
-try again. If it still doesn't appear, use Option B.
-
-## Option B: run it on Windows directly
-
-Install Python 3.11+ from python.org and tick "Add to PATH". Then, in PowerShell:
-
-```powershell
-cd \\wsl.localhost\Ubuntu\home\<your-linux-user>\store-system
-py -m pip install -r automation\requirements.txt
-py -m playwright install chromium
-$env:BROWSER_PROFILES = "$env:LOCALAPPDATA\storebot-profiles"   # keep the login on Windows' own disk
-py automation\poshmark_check.py login
-py automation\poshmark_check.py check "https://poshmark.com/listing/..."
-```
-
-Set `BROWSER_PROFILES` the same way in every new PowerShell window. If you don't, the script
-can't find your saved login.
-
-## What the results mean
-
-| Exit | Prints | Meaning |
-|---|---|---|
-| 0 | `FOUND the Delete button` | It works. The screenshot in `data/automation/` shows the red box. |
-| 2 | `not logged in` | Run `login` again. Poshmark sometimes ends sessions. |
-| 3 | `could NOT find the Delete button` | Either the listing isn't on the logged-in account, or Poshmark changed its page. Send the screenshot. |
-| 1 | `failed with an error` | Anything else, such as a timeout or a bad link. Send the message and screenshot. |
-
-Failures are also posted to `#alerts` using the bot's token, if `bot/.env` has `DISCORD_TOKEN`
-and `ALERTS_CHANNEL_ID`.
-
-**No listings yet?** You can still run `login` and then `check` on any public Poshmark listing.
-It should end with exit 3 and say the edit page doesn't exist (404), because the listing isn't yours. That shows the login and page loading
-work. Run the full test once your first item is posted.
-
-## Safety rules this folder follows
-
-- It acts only on your own listings and never browses or scrapes other sellers.
-- It moves at human speed, with 2 to 5 second random pauses between pages.
+- It acts only on your own listings, and only after a recorded sale (or your typed `DELETE`).
+- It moves at human speed, with 2 to 5 second random pauses, one listing at a time.
 - It uses a visible window, your home internet, and no stealth tricks.
-- If it sees a CAPTCHA or a login prompt, it stops and alerts you. It never tries to get past them.
-- Real deleting will come in a later PR, and only after you say so.
+- It never posts or changes prices. Those still go through approvals.
