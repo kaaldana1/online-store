@@ -67,7 +67,7 @@ python automation/poshmark.py check "https://poshmark.com/listing/Pirate-Hat-6af
 # 2. add the hat to the database as a TEST item
 python automation/poshmark.py add-test-listing "https://poshmark.com/listing/Pirate-Hat-6afa61daa6935870035b2652"
 
-# 3. start the worker and leave this window open
+# 3. make sure a worker is running: the Docker one (see below), or this in a terminal
 python automation/poshmark.py worker
 ```
 
@@ -79,12 +79,41 @@ python automation/poshmark.py worker
 To test only the delete part without the bot, use
 `python automation/poshmark.py delist "<link>"` and type `DELETE` when it asks.
 
-## Day to day
+## Run the worker in Docker (recommended)
 
-Start the worker whenever the computer is on: `python automation/poshmark.py worker`. Stop it
-with Ctrl+C. While it's off, Poshmark delists fall back to manual alerts after 10 minutes.
-To turn auto-delist off completely, remove `AUTO_DELIST=poshmark` from `bot/.env` and restart
-the bot.
+The worker has its own container, `poshmark-worker`, next to the bot. It starts and restarts
+with the bot, so you don't need a terminal open. Inside, it runs a normal Chromium window on a
+virtual screen (Xvfb), not headless mode, so Poshmark sees the same kind of browser as when you
+run it yourself. It uses the login you saved with `login`, which lives in `browser-profiles/`
+on this computer.
+
+One-time setup, after `git pull`:
+
+```bash
+cd ~/store-system
+id -u                      # if this is NOT 1000, run:  echo "WORKER_UID=$(id -u)" >> .env && echo "WORKER_GID=$(id -g)" >> .env
+docker compose up -d --build        # or: docker-compose up -d --build
+docker compose logs -f poshmark-worker
+```
+
+The logs should say `Watching for Poshmark delists every 60s.` Press Ctrl+C to stop following
+the logs. The worker keeps running.
+
+- **Stop any terminal or tmux worker** you started before. Only one worker runs at a time. A
+  second one waits, or with `--once`, refuses to start.
+- **Log in again** (when an alert says the login expired):
+  `docker compose stop poshmark-worker`, then `python automation/poshmark.py login` in the venv,
+  then `docker compose start poshmark-worker`. Only one browser can use the saved login at once.
+- **Turn it off:** remove `AUTO_DELIST=poshmark` from `bot/.env`, then run
+  `docker compose up -d`. The worker then waits quietly instead of restarting over and over.
+
+The venv is still needed for `login`, `check`, `delist` and `add-test-listing`, because those
+need a window you can see.
+
+## Without Docker
+
+Run `python automation/poshmark.py worker` in a terminal and leave it open. Stop it with Ctrl+C.
+While no worker is running, Poshmark delists fall back to manual alerts after 10 minutes.
 
 ## First-time install
 
