@@ -291,14 +291,33 @@ class MarkPostedButton(discord.ui.DynamicItem[discord.ui.Button], template=r"pos
         if r["status"] == "live":
             await interaction.response.send_message("Already marked posted.", ephemeral=True)
             return
-        db.execute("UPDATE listings SET status='live', posted_at=datetime('now') WHERE id=?", (self.listing_id,))
+        # Ask for the listing's link: auto-delist needs it to find the listing after a sale.
+        await interaction.response.send_modal(PostedLinkModal(self.listing_id, r["sku"], r["platform_id"]))
+
+
+class PostedLinkModal(discord.ui.Modal):
+    def __init__(self, listing_id: int, sku: str, platform_id: str):
+        super().__init__(title=f"Posted {sku} on {PLATFORM_NAMES.get(platform_id, platform_id)}"[:45])
+        self.listing_id = listing_id
+        self.link = discord.ui.TextInput(
+            label="Listing link (paste it from the site)", required=False, max_length=500,
+            placeholder="https://... (needed for automatic delisting)")
+        self.add_item(self.link)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        r = db.execute("SELECT l.*, i.sku FROM listings l JOIN items i ON i.id=l.item_id WHERE l.id=?",
+                       (self.listing_id,)).fetchone()
+        url = (self.link.value or "").strip() or None
+        db.execute("UPDATE listings SET status='live', posted_at=datetime('now'), url=COALESCE(?, url) WHERE id=?",
+                   (url, self.listing_id))
         db.execute("UPDATE items SET status='listed' WHERE id=?", (r["item_id"],))
         db.commit()
         n, goal = posted_today(), CFG["goal"]["listings_per_day"]
         await interaction.response.edit_message(view=None)
+        note = "" if url else " (no link saved, so this one will need a manual delist when it sells elsewhere)"
         await interaction.followup.send(
             f"📤 {r['sku']} posted on {PLATFORM_NAMES.get(r['platform_id'], r['platform_id'])} by "
-            f"{interaction.user.display_name}. Today: **{n}/{goal}** items listed" + (" 🎉" if n >= goal else "."))
+            f"{interaction.user.display_name}{note}. Today: **{n}/{goal}** items listed" + (" 🎉" if n >= goal else "."))
 
 
 # ------------------------------------------------------------ /today, /spend

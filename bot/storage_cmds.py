@@ -21,9 +21,12 @@ import search  # noqa: E402
 
 STORAGE_URL = os.environ.get("STORAGE_URL", "http://localhost:8765")
 NAMES = {"ebay": "eBay", "poshmark": "Poshmark", "facebook": "Facebook"}
-# Platforms with a working automatic-delist worker. eBay joins once its API access is approved;
-# until then every delist is a human task so nothing can slip through.
-AUTO_DELIST: set[str] = set()
+# Platforms with a working automatic-delist worker, from AUTO_DELIST in bot/.env (e.g.
+# AUTO_DELIST=poshmark). Poshmark's worker is automation/poshmark.py and runs on the PC.
+# Anything not listed stays a human task, so nothing can slip through. If a worker is off or
+# stuck, the bot still alerts after 10 minutes.
+def auto_delist() -> set[str]:
+    return {p.strip().lower() for p in os.environ.get("AUTO_DELIST", "").split(",") if p.strip()}
 db = None
 bot = None
 
@@ -119,18 +122,25 @@ async def sold(interaction: discord.Interaction, sku: str, platform: Literal["eb
     db.execute("INSERT INTO sales (item_id, listing_id, sale_price) VALUES (?,?,?)", (it["id"], lid, price))
     db.commit()   # trigger has now marked it sold and queued delist tasks
     for t in db.execute("SELECT d.id, l.platform_id FROM delist_tasks d JOIN listings l ON l.id=d.listing_id "
-                        "WHERE d.status='pending' AND l.item_id=?", (it["id"],)).fetchall():
-        if t["platform_id"] not in AUTO_DELIST:
-            db.execute("UPDATE delist_tasks SET status='manual_required' WHERE id=?", (t["id"],))
+                        "WHERE d.status IN ('pending','manual_required') AND l.item_id=?", (it["id"],)).fetchall():
+        status = "pending" if t["platform_id"] in auto_delist() else "manual_required"
+        db.execute("UPDATE delist_tasks SET status=? WHERE id=?", (status, t["id"]))
     db.commit()
     others = db.execute("SELECT l.platform_id FROM delist_tasks d JOIN listings l ON l.id=d.listing_id "
                         "JOIN sales s ON s.id=d.reason_sale WHERE s.item_id=? AND d.status!='done'",
                         (it["id"],)).fetchall()
     where = f" It was in **bin {it['bin_id']}**." if it["bin_id"] is not None else ""
     if others:
-        todo = ", ".join(NAMES.get(o["platform_id"], o["platform_id"]) for o in others)
-        msg = (f"💰 {it['sku']} sold on {NAMES[platform]} for ${price:.2f}.{where}\n"
-               f"⚠️ Still listed on: **{todo}**. Delist alerts are in #alerts; tap Done on each once it's removed.")
+        AUTO_DELIST = auto_delist()
+        auto = [NAMES.get(o["platform_id"], o["platform_id"]) for o in others if o["platform_id"] in AUTO_DELIST]
+        manual = [NAMES.get(o["platform_id"], o["platform_id"]) for o in others if o["platform_id"] not in AUTO_DELIST]
+        msg = f"💰 {it['sku']} sold on {NAMES[platform]} for ${price:.2f}.{where}"
+        if manual:
+            msg += (f"\n⚠️ Still listed on: **{', '.join(manual)}**. Delist alerts are in #alerts; "
+                    f"tap Done on each once it's removed.")
+        if auto:
+            msg += (f"\n🤖 Removing from **{', '.join(auto)}** automatically. You'll get an alert in "
+                    f"#alerts if that fails or hasn't happened in 10 minutes.")
     else:
         msg = f"💰 {it['sku']} sold on {NAMES[platform]} for ${price:.2f}.{where} No other listings to remove."
     await interaction.response.send_message(msg)
