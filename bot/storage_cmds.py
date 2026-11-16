@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "storage"))
 import search  # noqa: E402
 
-STORAGE_URL = os.environ.get("STORAGE_URL", "http://localhost:8080")
+STORAGE_URL = os.environ.get("STORAGE_URL", "http://localhost:8765")
 NAMES = {"ebay": "eBay", "poshmark": "Poshmark", "facebook": "Facebook"}
 # Platforms with a working automatic-delist worker. eBay joins once its API access is approved;
 # until then every delist is a human task so nothing can slip through.
