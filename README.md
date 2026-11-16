@@ -13,6 +13,7 @@ listing/pricer.py       market price → list price + lowest offer per platform 
 listing/config.toml     step 2 knobs: AI model, price multipliers, min profit, label estimates
 bot/web.py              step 3: storage map web server (http://localhost:8765) + its API
 web/storage.html        step 3: the storage map page (bins, drag & drop, finder)
+automation/          browser worker: poshmark_check.py safe dry run (see automation/README.md)
 storage/search.py       step 3: finder (keyword index + optional AI pick)
 bot/storage_cmds.py     step 3: /find, /bin, /move, /sold
 ```

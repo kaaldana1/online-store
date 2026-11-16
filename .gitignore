@@ -2,3 +2,5 @@ data/
 bot/.env
 __pycache__/
 *.db
+browser-profiles/
+.venv-automation/
