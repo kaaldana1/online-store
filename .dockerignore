@@ -4,3 +4,5 @@ bot/.env
 **/__pycache__/
 *.db
 .git/
+browser-profiles/
+.venv-automation/
