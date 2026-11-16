@@ -35,7 +35,7 @@ import fees as feecalc  # noqa: E402
 from init_db import connect, init  # noqa: E402
 import listing_ui  # noqa: E402  (step 2: /newitem, prices, packets)
 import storage_cmds  # noqa: E402  (step 3: /find, /bin, /move, /sold)
-import web  # noqa: E402  (step 3: storage map at http://localhost:8080)
+import web  # noqa: E402  (step 3: storage map at http://localhost:8765)
 
 
 def _load_env() -> None:
@@ -147,7 +147,7 @@ class StoreBot(discord.Client):
             await self.tree.sync()
         self.watch.start()
         try:
-            self.web = await web.start(db, port=int(os.environ.get("WEB_PORT", 8080)))
+            self.web = await web.start(db, port=int(os.environ.get("WEB_PORT", 8765)))
         except OSError as e:
             print(f"Storage map NOT started: {e}")
 

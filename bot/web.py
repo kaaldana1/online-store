@@ -1,6 +1,6 @@
 """Storage map web server, running inside the bot process (same database, same event loop).
 
-Open http://localhost:8080 on the computer running Docker.
+Open http://localhost:8765 on the computer running Docker.
 """
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ def make_app(db) -> web.Application:
     return app
 
 
-async def start(db, host: str = "0.0.0.0", port: int = 8080) -> web.AppRunner:
+async def start(db, host: str = "0.0.0.0", port: int = 8765) -> web.AppRunner:
     runner = web.AppRunner(make_app(db))
     await runner.setup()
     await web.TCPSite(runner, host, port).start()

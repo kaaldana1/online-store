@@ -5,7 +5,7 @@ services:
     restart: unless-stopped        # comes back after crashes and Docker restarts
     env_file: bot/.env             # DISCORD_TOKEN, GUILD_ID, channel IDs
     ports:
-      - "127.0.0.1:8080:8080"     # storage map: http://localhost:8080 (this computer only)
+      - "127.0.0.1:8765:8765"     # storage map: http://localhost:8765 (this computer only)
     volumes:
       - ./data:/app/data           # database lives on the host: store-system/data/store.db
     logging:

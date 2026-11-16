@@ -1,7 +1,7 @@
 # Step 3: Storage map, finder, and sold safety
 
 ## What's new
-- **Storage map web page** at **http://localhost:8080**, served by the bot itself (no extra container).
+- **Storage map web page** at **http://localhost:8765**, served by the bot itself (no extra container).
   - **Edit layout** lets you add bins, drag them to match your real shelves, resize them with the blue corner, and rename or delete them. Bins can't overlap.
   - Items from `/newitem` land in **"Not in a bin yet"**. Drag one onto a bin, or use its **Move to bin…** menu, which also works on touch screens.
   - Drag **photos from your computer** straight onto a bin to log a quick item there (it asks for a name).
@@ -21,17 +21,19 @@
 2. Rebuild:
    ```
    docker compose up -d --build     # or: docker-compose down && docker-compose up -d --build
-   docker compose logs -f           # look for "Storage map at http://localhost:8080"
+   docker compose logs -f           # look for "Storage map at http://localhost:8765"
    ```
-3. Open **http://localhost:8080** in a browser on the same Windows PC. WSL forwards localhost automatically.
+3. Open **http://localhost:8765** in a browser on the same Windows PC. WSL forwards localhost automatically.
 4. Click **Edit layout → + Add bin** a few times and arrange the bins like your shelves. Bin numbers count up from 1, so label the real bins to match. Then click **Done editing**.
 
-**Phone access:** for safety the page only listens on this computer. To use it from your mom's phone later, the easiest safe route is Tailscale (free): install it on the PC and her phone, change the compose port line to `"8080:8080"`, and set `STORAGE_URL` in `bot/.env` to the PC's Tailscale address so `/find` links open on her phone too. Until then, `/find`, `/bin`, `/move` and `/newitem … bin:` cover her day-to-day from Discord.
+**Port already in use?** If the page shows something else (e.g. "EDB Postgres… Server is up and running"), another program owns that port. Change both numbers in the compose line `"127.0.0.1:8765:8765"` and set `WEB_PORT` and `STORAGE_URL` in `bot/.env` to match, then `docker compose up -d`.
+
+**Phone access:** for safety the page only listens on this computer. To use it from your mom's phone later, the easiest safe route is Tailscale (free): install it on the PC and her phone, change the compose port line to `"8765:8765"`, and set `STORAGE_URL` in `bot/.env` to the PC's Tailscale address so `/find` links open on her phone too. Until then, `/find`, `/bin`, `/move` and `/newitem … bin:` cover her day-to-day from Discord.
 
 ## Test it
 | # | Do this | Pass if |
 |---|---|---|
-| 1 | Open http://localhost:8080 | The page loads; your `/newitem` items are under "Not in a bin yet" |
+| 1 | Open http://localhost:8765 | The page loads; your `/newitem` items are under "Not in a bin yet" |
 | 2 | Edit layout → add 3 bins, move and resize them, Done | Positions stick after refreshing the page |
 | 3 | Drag an item card onto a bin | Toast "S0001 → bin 2", and the bin's count goes up |
 | 4 | Drag a photo file from your desktop onto a bin, give it a name | It appears in that bin |
