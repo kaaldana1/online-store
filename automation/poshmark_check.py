@@ -156,6 +156,7 @@ def cmd_check(url: str | None) -> int:
         print(f"That doesn't look like a Poshmark listing link: {url}")
         return 1
     listing_id = m.group(1)
+    url = url.split("?", 1)[0].split("#", 1)[0]   # drop ad/tracking junk after the ?
 
     with sync_playwright() as pw:
         ctx = open_browser(pw, block_writes=True)
@@ -184,6 +185,13 @@ def cmd_check(url: str | None) -> int:
                 msg = f"Poshmark test: login expired on the edit page. Screenshot: {shot}"
                 print(msg); alert(f"⚠️ {msg}")
                 return 2
+
+            if page.get_by_text(re.compile(r"page you are looking for could not be found", re.I)).count():
+                shot = screenshot(page, "poshmark-not-yours")
+                msg = (f"Poshmark test: the edit page doesn't exist for you (404). That's expected when "
+                       f"the listing isn't on the logged-in account. Use one of your own listings. Screenshot: {shot}")
+                print(msg); alert(f"⚠️ {msg}")
+                return 3
 
             print("3/3 Looking for the Delete button (it will NOT be clicked)")
             btn = None

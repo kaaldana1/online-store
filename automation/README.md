@@ -40,8 +40,11 @@ python -m playwright install --with-deps chromium      # asks for your sudo pass
 python automation/poshmark_check.py login
 
 # the test: paste the link of a listing on YOUR account
-python automation/poshmark_check.py check https://poshmark.com/listing/...
+python automation/poshmark_check.py check "https://poshmark.com/listing/..."
 ```
+
+**Always put the link in quotes.** Links copied from ads or the app often have `&` in them,
+and without quotes the terminal splits the link into pieces and runs them in the background.
 
 Later runs only need `source .venv-automation/bin/activate`, followed by the `check` line.
 If you leave out the link, the script uses the newest live Poshmark listing in `data/store.db`
@@ -60,7 +63,7 @@ py -m pip install -r automation\requirements.txt
 py -m playwright install chromium
 $env:BROWSER_PROFILES = "$env:LOCALAPPDATA\storebot-profiles"   # keep the login on Windows' own disk
 py automation\poshmark_check.py login
-py automation\poshmark_check.py check https://poshmark.com/listing/...
+py automation\poshmark_check.py check "https://poshmark.com/listing/..."
 ```
 
 Set `BROWSER_PROFILES` the same way in every new PowerShell window. If you don't, the script
@@ -79,7 +82,7 @@ Failures are also posted to `#alerts` using the bot's token, if `bot/.env` has `
 and `ALERTS_CHANNEL_ID`.
 
 **No listings yet?** You can still run `login` and then `check` on any public Poshmark listing.
-It should end with exit 3, because the listing isn't yours. That shows the login and page loading
+It should end with exit 3 and say the edit page doesn't exist (404), because the listing isn't yours. That shows the login and page loading
 work. Run the full test once your first item is posted.
 
 ## Safety rules this folder follows
