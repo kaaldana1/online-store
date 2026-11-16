@@ -291,7 +291,13 @@ def run(action: str, url: str) -> Result:
         return Result(1, f"That doesn't look like a Poshmark listing link: {url}")
     url, listing_id = parsed
     with sync_playwright() as pw:
-        ctx = open_browser(pw)
+        try:
+            ctx = open_browser(pw)
+        except Exception as e:
+            hint = (" Is another copy running with the same login (the worker container, or `login`)? "
+                    "Only one browser can use the saved login at a time." if "lock" in str(e).lower()
+                    or "in use" in str(e).lower() else "")
+            return Result(1, f"Couldn't start the browser: {str(e)[:300]}.{hint}")
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
             return do_check(page, url, listing_id) if action == "check" else do_delist(ctx, page, url, listing_id)
@@ -324,14 +330,46 @@ def auto_delist_on() -> bool:
     return "poshmark" in {p.strip().lower() for p in os.environ.get("AUTO_DELIST", "").split(",")}
 
 
-def worker(once: bool) -> int:
+def idle(msg: str) -> int:
+    """In Docker: explain once, then wait instead of exiting (exiting makes Docker restart us in a loop)."""
+    print(msg + "\nWaiting. Fix it, then restart:  docker compose restart poshmark-worker")
+    while True:
+        time.sleep(3600)
+
+
+def single_worker_lock(once: bool):
+    """Only one worker at a time (e.g. the Docker one and one in a terminal), so a listing is never
+    handled twice. Works across Docker and this computer because both see the same data/ folder."""
+    try:
+        import fcntl
+    except ImportError:          # native Windows: no lock, just don't run two copies
+        return True
+    SHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    f = open(SHOTS_DIR / "poshmark-worker.lock", "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        if once:
+            print("Another Poshmark worker is already running (maybe the Docker one), so this one will "
+                  "not run. Stop the other one first:  docker compose stop poshmark-worker")
+            return None
+        print("Another Poshmark worker is already running. This one will wait and take over when it stops.")
+        fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+
+
+def worker(once: bool, idle_if_off: bool = False) -> int:
     if not DB_PATH.exists():
-        print(f"No database at {DB_PATH}. Start the bot once first.")
-        return 1
+        msg = f"No database at {DB_PATH}. Start the bot once first."
+        return idle(msg) if idle_if_off else (print(msg) or 1)
     if not auto_delist_on():
-        print("Auto-delist is off. Add this line to bot/.env, then restart the bot and this worker:\n"
-              "    AUTO_DELIST=poshmark")
+        msg = ("Auto-delist is off. Add this line to bot/.env, then restart the bot and this worker:\n"
+               "    AUTO_DELIST=poshmark")
+        return idle(msg) if idle_if_off else (print(msg) or 1)
+    lock = single_worker_lock(once)
+    if lock is None:
         return 1
+    db_alerted = False
     print(f"Watching for Poshmark delists every {POLL_SECONDS}s. Leave this window open; Ctrl+C to stop.")
     while True:
         try:
@@ -342,13 +380,21 @@ def worker(once: bool) -> int:
                 WHERE d.status = 'pending' AND l.platform_id = 'poshmark' AND d.reason_sale IS NOT NULL
                 ORDER BY d.id""").fetchall()
             for t in rows:
-                print(f"\n[{datetime.now():%H:%M}] {t['sku']}: sold elsewhere, delisting from Poshmark")
-                con.execute("UPDATE delist_tasks SET attempts = attempts + 1 WHERE id=?", (t["id"],))
+                # Claim it. If another copy of the worker got there first, skip it.
+                claimed = con.execute("UPDATE delist_tasks SET attempts = attempts + 1 "
+                                      "WHERE id=? AND status='pending' AND attempts=?",
+                                      (t["id"], t["attempts"])).rowcount
                 con.commit()
+                if not claimed:
+                    continue
+                print(f"\n[{datetime.now():%H:%M}] {t['sku']}: sold elsewhere, delisting from Poshmark")
                 if not t["url"]:
                     r = Result(3, "No Poshmark link is saved for this listing, so it can't be found automatically.")
                 else:
-                    r = run("delist", t["url"])
+                    try:
+                        r = run("delist", t["url"])
+                    except Exception as e:  # never let one listing stop the worker
+                        r = Result(1, f"Unexpected error: {e!r}")
                 report(r, f"delist of {t['sku']}", t["url"] or "(no link)", notify_ok=True)
                 if r.ok:
                     con.execute("UPDATE delist_tasks SET status='done', done_at=datetime('now'), last_error=NULL "
@@ -366,13 +412,17 @@ def worker(once: bool) -> int:
                 con.commit()
                 human_pause(5, 10)
             con.close()
+            db_alerted = False
         except sqlite3.OperationalError as e:
             msg = f"Database problem: {e}."
             if "readonly" in str(e):
                 msg += " Fix once with:  sudo chown -R $USER:$USER data"
             print(msg)
-            alert(f"⚠️ Poshmark worker: {msg} Delists are falling back to manual alerts.")
-            return 1
+            if not db_alerted:  # once, not every minute
+                alert(f"⚠️ Poshmark worker: {msg} Delists are falling back to manual alerts.")
+                db_alerted = True
+            if once:
+                return 1
         if once:
             return 0
         time.sleep(POLL_SECONDS)
@@ -413,6 +463,7 @@ def main() -> int:
     d.add_argument("--yes", action="store_true", help="skip the 'type DELETE' question")
     w = sub.add_parser("worker", help="auto-delist Poshmark listings of items sold elsewhere")
     w.add_argument("--once", action="store_true", help="handle what's waiting, then exit")
+    w.add_argument("--idle-if-off", action="store_true", help="(Docker) wait instead of exiting when off")
     sub.add_parser("add-test-listing", help="add a TEST item for a listing link").add_argument("url")
     a = ap.parse_args()
 
@@ -433,7 +484,7 @@ def main() -> int:
         return r.code
     if a.cmd == "worker":
         try:
-            return worker(a.once)
+            return worker(a.once, a.idle_if_off)
         except KeyboardInterrupt:
             print("\nStopped. Delists will show up as manual alerts in #alerts until you start it again.")
             return 0
