@@ -24,6 +24,7 @@ services:
     env_file: bot/.env             # AUTO_DELIST, DISCORD_TOKEN, ALERTS_CHANNEL_ID
     user: "${WORKER_UID:-1000}:${WORKER_GID:-1000}"   # your Linux user, so files stay yours
     shm_size: "1gb"                # Chromium needs more shared memory than Docker's default
+    init: true                     # a tiny init process, so signals and child processes behave
     volumes:
       - ./data:/app/data
       - ./browser-profiles:/app/browser-profiles
