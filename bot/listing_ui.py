@@ -33,6 +33,12 @@ CFG = tomllib.loads((ROOT / "listing" / "config.toml").read_text())
 PHOTOS = ROOT / "data" / "photos"
 PLATFORM_NAMES = {"ebay": "eBay", "poshmark": "Poshmark", "facebook": "Facebook (local)"}
 TITLE_KEY = {"ebay": "ebay_title", "poshmark": "poshmark_title", "facebook": "facebook_title"}
+TAGS_KEY = {"ebay": "tags", "poshmark": "poshmark_style_tags", "facebook": "facebook_tags"}
+# Draft fields kept in appraisals.keywords (JSON) for the packets, the finder and later delisting.
+META_KEYS = ("search_query", "brand", "material", "style_era", "skill_category", "identification_confidence",
+             "evidence", "checks_before_listing", "blockers", "sources", "ebay_item_specifics",
+             "poshmark_brand", "poshmark_category", "poshmark_size", "poshmark_colors", "poshmark_style_tags",
+             "facebook_tags", "lint", "notices", "web_searches")
 
 db = None          # set by register()
 bot = None
@@ -58,6 +64,21 @@ def comps_view(item_id: int, query: str) -> discord.ui.View:
                                  url=f"https://poshmark.com/search?query={q}&availability=sold_out"))
     v.add_item(EnterPricesButton(item_id))
     return v
+
+
+def stop_lines(meta: dict) -> list[str]:
+    """Things that should stop a listing: the AI's blockers plus listing-check errors still open."""
+    out = [f"🛑 {b}" for b in meta.get("blockers", [])]
+    out += [f"🛑 {i['field']}: {i['message']}" for i in meta.get("lint", []) if i["level"] == "error"]
+    return out
+
+
+def load_meta(item_id: int) -> dict:
+    a = db.execute("SELECT keywords FROM appraisals WHERE item_id=? ORDER BY id DESC LIMIT 1", (item_id,)).fetchone()
+    try:
+        return json.loads(a["keywords"]) if a and a["keywords"] else {}
+    except ValueError:
+        return {}
 
 
 def _num(s: str | None, default: float | None = None) -> float | None:
@@ -96,7 +117,7 @@ async def newitem(interaction: discord.Interaction, photo: discord.Attachment,
     db.commit()
 
     try:
-        d = await asyncio.to_thread(ai.identify, blobs, notes)
+        d = await asyncio.to_thread(ai.identify, blobs, notes, sku)
     except Exception as e:  # keep the item; she can still price it by hand
         d = None
         err = str(e)
@@ -106,25 +127,41 @@ async def newitem(interaction: discord.Interaction, photo: discord.Attachment,
                    "WHERE id=?", (d["name"], d["description"], d["category"],
                                   f"{d['condition']}. {d['condition_notes']}".strip(),
                                   round(d["est_weight_lb"] * 16, 1), item_id))
-        meta = {k: d[k] for k in ("search_query", "brand", "material", "style_era", "checks_before_listing")}
+        meta = {k: d.get(k) for k in META_KEYS}
         db.execute("INSERT INTO appraisals (item_id, keywords, method) VALUES (?,?, 'pending_comps')",
                    (item_id, json.dumps(meta)))
         for pid in PLATFORM_NAMES:
             db.execute("INSERT INTO listings (item_id, platform_id, title, description, tags) VALUES (?,?,?,?,?) "
                        "ON CONFLICT(item_id, platform_id) DO UPDATE SET title=excluded.title, "
                        "description=excluded.description, tags=excluded.tags",
-                       (item_id, pid, d[TITLE_KEY[pid]], d["description"], json.dumps(d["tags"])))
+                       (item_id, pid, d[TITLE_KEY[pid]], d["description"], json.dumps(d[TAGS_KEY[pid]])))
         db.commit()
         query = d["search_query"]
-        e = discord.Embed(title=f"{sku} · {d['name']}", color=discord.Color.blurple(),
+        stops = stop_lines(meta)
+        e = discord.Embed(title=f"{sku} · {d['name']}"[:256],
+                          color=discord.Color.red() if stops else discord.Color.blurple(),
                           description=f"**eBay title:** {d['ebay_title']}")
+        if stops:
+            e.add_field(name="🛑 Don't list until this is sorted out", value="\n".join(stops)[:1024], inline=False)
         e.add_field(name="Category", value=d["category"])
         e.add_field(name="Condition", value=d["condition"])
         e.add_field(name="Est. weight", value=f"{d['est_weight_lb']:g} lb")
         e.add_field(name="Brand / material", value=f"{d['brand']} · {d['material']}"[:1024], inline=False)
+        sure = {"high": "high", "medium": "medium (some details inferred)", "low": "low (best guess)"}
+        ident = f"Confidence: {sure.get(d['identification_confidence'], d['identification_confidence'] or '-')}"
+        if d["evidence"]:
+            ident += "\n" + "\n".join(f"• {x}" for x in d["evidence"][:4])
+        if d["sources"]:
+            ident += "\n" + "\n".join(f"🔗 <{s['url']}> {s['confirmed']}" for s in d["sources"][:3])
+        e.add_field(name="What it's based on", value=ident[:1024], inline=False)
         if d["checks_before_listing"]:
             e.add_field(name="⚠️ Check before listing",
                         value="\n".join(f"• {c}" for c in d["checks_before_listing"])[:1024], inline=False)
+        fixes = [f"✏️ {i['field']}: {i['message']}" for i in d["lint"] if i["level"] == "warn"]
+        if fixes:
+            e.add_field(name="✏️ Worth a look", value="\n".join(fixes)[:1024], inline=False)
+        if d["notices"]:
+            e.add_field(name="ℹ️ Note", value="\n".join(d["notices"])[:1024], inline=False)
         e.add_field(name="Next", value="1. Tap **eBay sold prices** and look at what similar items actually sold for.\n"
                                        "2. Tap **Enter prices** and type the typical sold price.", inline=False)
     else:
@@ -204,9 +241,11 @@ class PriceModal(discord.ui.Modal):
         db.execute("UPDATE approvals SET status='expired' WHERE kind='post_listing' AND ref_id=? AND status='pending'",
                    (self.item_id,))
         rng = f" (range ${lo:.0f}–${hi:.0f})" if lo is not None and hi is not None else ""
+        stops = stop_lines(load_meta(self.item_id))
+        warn = ("\n\n**Open problems from the draft:**\n" + "\n".join(stops)) if stops else ""
         summary = (f"**{item['sku']} · {item['name']}**  ({item['category']})\n"
                    f"Typical sold price: ${market:.0f}{rng} · paid ${cost:g} · {weight:g} lb\n\n" + "\n".join(lines) +
-                   "\n\nApprove → I'll post copy-paste listings for each platform.")
+                   warn + "\n\nApprove → I'll post copy-paste listings for each platform.")[:4000]
         db.execute("INSERT INTO approvals (kind, ref_table, ref_id, summary, payload) VALUES "
                    "('post_listing','items',?,?,?)", (self.item_id, summary, json.dumps(payload)))
         db.commit()
@@ -229,7 +268,7 @@ class EnterPricesButton(discord.ui.DynamicItem[discord.ui.Button], template=r"pr
 
 
 # ------------------------------------------------------------ approval → packets
-def packet_text(listing, item, checks: list[str]) -> list[str]:
+def packet_text(listing, item, meta: dict) -> list[str]:
     pid = listing["platform_id"]
     tags = json.loads(listing["tags"] or "[]")
     head = (f"## {PLATFORM_NAMES.get(pid, pid)} · {item['sku']}\n"
@@ -237,10 +276,20 @@ def packet_text(listing, item, checks: list[str]) -> list[str]:
             f"profit ≈ ${listing['est_net']:.2f}\n**Title**\n```\n{listing['title']}\n```\n")
     if pid == "ebay":
         head += f"**Condition:** {item['condition'] or '-'}"
+        specs = meta.get("ebay_item_specifics") or []
+        if specs:
+            head += "\n**Item specifics**\n" + "\n".join(f"• {s['name']}: {s['value']}" for s in specs[:20])
     elif pid == "poshmark":
-        head += f"**Style tags** (pick up to 3): {', '.join(tags[:6]) or '-'}"
+        head += (f"**Brand:** {meta.get('poshmark_brand') or '-'} · **Category:** {meta.get('poshmark_category') or '-'}"
+                 f" · **Size:** {meta.get('poshmark_size') or '-'}\n"
+                 f"**Colors:** {', '.join(meta.get('poshmark_colors') or []) or '-'}\n"
+                 f"**Style tags:** {', '.join(tags[:3]) or '-'}")
     else:
-        head += f"**Tags:** {', '.join(tags) or '-'}\nLocal pickup only."
+        area = CFG.get("facebook", {}).get("pickup_area", "").strip()
+        head += f"**Tags:** {', '.join(tags) or '-'}\nLocal pickup only" + (f": {area}." if area else ".")
+    for s in stop_lines(meta):
+        head += "\n" + s
+    checks = meta.get("checks_before_listing") or []
     if checks:
         head += "\n⚠️ " + " · ".join(checks)
     desc = f"**Description**\n```\n{(listing['description'] or '').strip()[:1850]}\n```"
@@ -250,8 +299,7 @@ def packet_text(listing, item, checks: list[str]) -> list[str]:
 async def on_listing_approved(interaction: discord.Interaction, approval) -> None:
     item_id = approval["ref_id"]
     item = db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
-    appr = db.execute("SELECT keywords FROM appraisals WHERE item_id=? ORDER BY id DESC LIMIT 1", (item_id,)).fetchone()
-    checks = json.loads(appr["keywords"]).get("checks_before_listing", []) if appr and appr["keywords"] else []
+    meta = load_meta(item_id)
     db.execute("UPDATE listings SET status='approved' WHERE item_id=? AND status='pending_approval'", (item_id,))
     db.commit()
     rows = db.execute("SELECT * FROM listings WHERE item_id=? AND status='approved' ORDER BY est_net DESC",
@@ -260,7 +308,7 @@ async def on_listing_approved(interaction: discord.Interaction, approval) -> Non
                                                      auto_archive_duration=1440)
     await thread.send("Long-press a grey box to copy it. Post on each site, then tap **Mark posted**.")
     for r in rows:
-        parts = packet_text(r, item, checks)
+        parts = packet_text(r, item, meta)
         for part in parts[:-1]:
             await thread.send(part)
         v = discord.ui.View(timeout=None)
