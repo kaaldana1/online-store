@@ -1,11 +1,23 @@
 # Step 2 listing assistant settings. Edit freely; restart the bot after changes.
 
 [ai]
-model = "claude-opus-5-5"     # ~3 cents per item. "claude-haiku-5-5" is far cheaper if quality holds.
+model = "claude-opus-5-5"     # ~8-15 cents per item with the skill + searches (/spend shows real cost).
+                              # "claude-haiku-5-5" is far cheaper if quality holds.
 effort = "low"                # low | medium | high. Low is plenty for identifying and drafting.
 price_in_per_mtok = 4.00      # $ per million input tokens (for the spend log)
 price_out_per_mtok = 20.00    # $ per million output tokens
 max_image_px = 1568           # photos are shrunk to this long edge before sending
+# resale-lister skill (skills/resale-lister/). Web search is for identifying marks, patterns and
+# style numbers only, never prices. It must be allowed for your API organization in the Claude
+# Console; if it isn't, the bot drafts without it and says so on the intake card.
+web_search = true
+max_web_searches = 3          # per item
+price_per_web_search = 0.01   # $10 per 1,000 searches (for the spend log)
+strict_tool = true            # set false if the API ever rejects strict mode on submit_listing
+
+[facebook]
+# Shown on every Facebook packet. Keep it general (neighborhood / cross streets), never your address.
+pickup_area = ""
 
 [goal]
 listings_per_day = 5

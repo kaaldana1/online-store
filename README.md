@@ -8,7 +8,8 @@ db/schema.sql           one SQLite database for everything (items, bins, listing
 db/init_db.py           creates data/store.db; --demo simulates a sale to show auto-delisting
 bot/bot.py              Discord bot: approval buttons, delist alerts, /fees command
 bot/listing_ui.py       step 2: /newitem → AI draft → comps → prices → approval → copy-paste packets
-listing/ai.py           one Claude call: identify item from photos, draft titles/description/tags
+listing/ai.py           Claude + the resale-lister skill: identify from photos, draft per-platform listings, lint, retry once
+skills/resale-lister/   the skill: SKILL.md, references/ (platform + category rules), scripts/lint_listing.py
 listing/pricer.py       market price → list price + lowest offer per platform (rules, no AI)
 listing/config.toml     step 2 knobs: AI model, price multipliers, min profit, label estimates
 bot/web.py              step 3: storage map web server (http://localhost:8765) + its API

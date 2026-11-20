@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name", "skill_category", "category", "brand", "material", "style_era",
+    "condition", "condition_notes", "est_weight_lb", "identification_confidence",
+    "evidence", "checks_before_listing", "blockers", "sources", "search_query",
+    "ebay_title", "ebay_item_specifics", "poshmark_title", "poshmark_brand",
+    "poshmark_category", "poshmark_size", "poshmark_colors", "poshmark_style_tags",
+    "facebook_title", "facebook_tags", "description", "tags"
+  ],
+  "properties": {
+    "name": {"type": "string", "description": "Short internal name, e.g. 'Gorham Chantilly sterling dinner fork'."},
+    "skill_category": {"type": "string", "enum": ["jewelry", "clothing", "sterling_tableware", "handbag", "general"]},
+    "category": {"type": "string", "description": "Fee category for the pricing code. 'default' unless another listed value clearly applies."},
+    "brand": {"type": "string", "description": "Maker or brand, or 'unbranded'."},
+    "material": {"type": "string", "description": "Material and purity as evidenced, e.g. 'sterling silver (925)', 'silverplate', 'gold tone metal'."},
+    "style_era": {"type": "string"},
+    "condition": {"type": "string", "enum": ["new with tags", "like new", "good", "fair", "for parts"]},
+    "condition_notes": {"type": "string", "description": "Each flaw and where it is."},
+    "est_weight_lb": {"type": "number", "description": "Estimated packed shipping weight in pounds."},
+    "identification_confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    "evidence": {"type": "array", "items": {"type": "string"}, "description": "What the photos actually show that supports each claim."},
+    "checks_before_listing": {"type": "array", "items": {"type": "string"}, "description": "Specific photos, measurements or confirmations the seller should get first. Most important first, five at most."},
+    "blockers": {"type": "array", "items": {"type": "string"}, "description": "Reasons not to list yet or at all. Usually empty."},
+    "sources": {
+      "type": "array",
+      "description": "Web pages relied on, if any searches were made.",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["url", "confirmed"],
+        "properties": {"url": {"type": "string"}, "confirmed": {"type": "string"}}
+      }
+    },
+    "search_query": {"type": "string", "description": "4-7 words to find true sold comps on eBay."},
+    "ebay_title": {"type": "string", "description": "80 characters or fewer."},
+    "ebay_item_specifics": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "value"],
+        "properties": {"name": {"type": "string"}, "value": {"type": "string"}}
+      }
+    },
+    "poshmark_title": {"type": "string", "description": "80 characters or fewer."},
+    "poshmark_brand": {"type": "string"},
+    "poshmark_category": {"type": "string", "description": "e.g. 'Women > Bags > Shoulder Bags'."},
+    "poshmark_size": {"type": "string"},
+    "poshmark_colors": {"type": "array", "items": {"type": "string"}, "description": "Up to two."},
+    "poshmark_style_tags": {"type": "array", "items": {"type": "string"}, "description": "Up to three."},
+    "facebook_title": {"type": "string", "description": "Under 100 characters."},
+    "facebook_tags": {"type": "array", "items": {"type": "string"}, "description": "Up to ten, no '#'."},
+    "description": {"type": "string", "description": "Plain text under 1,200 characters, shared by all platforms. Ends with 'SKU: ...' when a SKU was given."},
+    "tags": {"type": "array", "items": {"type": "string"}, "description": "General search keywords (kept for older bot code)."}
+  }
+}
