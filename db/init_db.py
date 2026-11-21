@@ -21,7 +21,19 @@ def connect(path: Path = DB_PATH) -> sqlite3.Connection:
     return con
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS won't add them to an
+# existing database, so they're added here when missing.
+ADDED_COLUMNS = [
+    ("sales", "source", "TEXT"),
+    ("sales", "voided_at", "TEXT"),
+]
+
+
 def init(con: sqlite3.Connection) -> None:
+    for table, col, decl in ADDED_COLUMNS:
+        cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        if cols and col not in cols:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     con.executescript((ROOT / "db" / "schema.sql").read_text())
     fees = tomllib.loads((ROOT / "platforms" / "fees.toml").read_text())
     for pid, p in fees.items():

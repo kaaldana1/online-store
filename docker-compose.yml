@@ -12,22 +12,3 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
-  # Poshmark auto-delist worker (automation/README.md). Starts and restarts with the bot.
-  # Uses the login saved by `python automation/poshmark.py login` (run once on this computer).
-  poshmark-worker:
-    build:
-      context: .
-      dockerfile: automation/Dockerfile
-    container_name: poshmark-worker
-    hostname: poshmark-worker      # fixed name, so Chromium can clean up its own stale profile lock
-    restart: unless-stopped
-    env_file: bot/.env             # AUTO_DELIST, DISCORD_TOKEN, ALERTS_CHANNEL_ID
-    user: "${WORKER_UID:-1000}:${WORKER_GID:-1000}"   # your Linux user, so files stay yours
-    shm_size: "1gb"                # Chromium needs more shared memory than Docker's default
-    init: true                     # a tiny init process, so signals and child processes behave
-    volumes:
-      - ./data:/app/data
-      - ./browser-profiles:/app/browser-profiles
-    logging:
-      driver: json-file
-      options: { max-size: "10m", max-file: "3" }

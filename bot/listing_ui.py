@@ -339,7 +339,7 @@ class MarkPostedButton(discord.ui.DynamicItem[discord.ui.Button], template=r"pos
         if r["status"] == "live":
             await interaction.response.send_message("Already marked posted.", ephemeral=True)
             return
-        # Ask for the listing's link: auto-delist needs it to find the listing after a sale.
+        # Ask for the listing's link: delist alerts and sale-email matching use it.
         await interaction.response.send_modal(PostedLinkModal(self.listing_id, r["sku"], r["platform_id"]))
 
 
@@ -349,7 +349,7 @@ class PostedLinkModal(discord.ui.Modal):
         self.listing_id = listing_id
         self.link = discord.ui.TextInput(
             label="Listing link (paste it from the site)", required=False, max_length=500,
-            placeholder="https://... (needed for automatic delisting)")
+            placeholder="https://... (puts the link in delist alerts)")
         self.add_item(self.link)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -362,7 +362,7 @@ class PostedLinkModal(discord.ui.Modal):
         db.commit()
         n, goal = posted_today(), CFG["goal"]["listings_per_day"]
         await interaction.response.edit_message(view=None)
-        note = "" if url else " (no link saved, so this one will need a manual delist when it sells elsewhere)"
+        note = "" if url else " (no link saved, so a delist alert for it won't have a link)"
         await interaction.followup.send(
             f"📤 {r['sku']} posted on {PLATFORM_NAMES.get(r['platform_id'], r['platform_id'])} by "
             f"{interaction.user.display_name}{note}. Today: **{n}/{goal}** items listed" + (" 🎉" if n >= goal else "."))

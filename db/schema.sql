@@ -164,11 +164,16 @@ CREATE TABLE IF NOT EXISTS sales (
     fees        REAL,
     label_cost  REAL,
     net_profit  REAL,
-    sold_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    sold_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    source      TEXT,                           -- 'discord' (/sold), 'email' (sale email watcher), 'test'
+    voided_at   TEXT                            -- set by /unsold (cancelled, returned, no-show)
 );
 
--- When an item sells, one delist task is created per OTHER live listing. The sync worker
--- runs them; anything that fails or needs a manual step pings #alerts until it's done.
+-- When an item sells, one delist task is created per OTHER listing that may be up somewhere.
+-- Every delist is a human task: the bot alerts in #alerts (re-pinging every 2 hours) until
+-- someone taps Done. There is no browser automation on purpose (see platforms/research.md).
+-- If the eBay API is approved later, a worker can pick up eBay tasks; until then nothing
+-- waits on a worker that doesn't exist.
 CREATE TABLE IF NOT EXISTS delist_tasks (
     id          INTEGER PRIMARY KEY,
     listing_id  INTEGER NOT NULL REFERENCES listings(id),
@@ -181,18 +186,58 @@ CREATE TABLE IF NOT EXISTS delist_tasks (
     done_at     TEXT
 );
 
-CREATE TRIGGER IF NOT EXISTS on_sale_delist_others
+-- Dropped and recreated on every start so existing databases get the current version.
+--   live / delist_failed  -> manual delist task (it's up on that site)
+--   approved              -> manual delist task too: the packet went out, so she may have posted
+--                            it without tapping "Mark posted". The alert says so.
+--   draft / pending_approval -> just closed; it was never posted.
+DROP TRIGGER IF EXISTS on_sale_delist_others;
+CREATE TRIGGER on_sale_delist_others
 AFTER INSERT ON sales
 BEGIN
     UPDATE listings SET status = 'sold' WHERE id = NEW.listing_id;
     UPDATE items    SET status = 'sold' WHERE id = NEW.item_id;
+    UPDATE listings SET status = 'ended', ended_at = datetime('now')
+        WHERE item_id = NEW.item_id AND id <> NEW.listing_id AND status IN ('draft','pending_approval');
+    UPDATE approvals SET status = 'expired'
+        WHERE kind = 'post_listing' AND ref_table = 'items' AND ref_id = NEW.item_id AND status = 'pending';
     INSERT INTO delist_tasks (listing_id, reason_sale, status)
-        SELECT l.id, NEW.id,
-               CASE p.automation WHEN 'api' THEN 'pending' ELSE 'manual_required' END
-        FROM listings l JOIN platforms p ON p.id = l.platform_id
+        SELECT l.id, NEW.id, 'manual_required'
+        FROM listings l
         WHERE l.item_id = NEW.item_id AND l.id <> NEW.listing_id
-          AND l.status IN ('live','approved','pending_approval');
+          AND l.status IN ('live','approved','delist_failed');
 END;
+
+-- ------------------------------------------------------------ sale email watcher (sales/email_watch.py)
+-- One row per marketplace email the watcher has looked at, so nothing is handled twice.
+CREATE TABLE IF NOT EXISTS email_events (
+    id          INTEGER PRIMARY KEY,
+    message_id  TEXT UNIQUE NOT NULL,           -- the email's Message-ID header
+    platform_id TEXT,
+    subject     TEXT,
+    received_at TEXT,
+    status      TEXT NOT NULL CHECK (status IN (
+                    'ignored',        -- from a marketplace, but not a sale email
+                    'recorded',       -- matched and recorded as a sale automatically
+                    'needs_confirm',  -- probable match; waiting for a tap on "Yes, it sold"
+                    'confirmed',      -- she tapped "Yes, it sold"
+                    'unmatched',      -- a sale email the watcher couldn't tie to an item
+                    'double_sale',    -- the item was already recorded as sold somewhere else
+                    'duplicate',      -- another email about a sale already recorded
+                    'dismissed')),    -- she tapped "Not a sale" / "Handled it"
+    match_how   TEXT,                           -- 'sku' | 'link' | 'title'
+    item_id     INTEGER REFERENCES items(id),
+    sale_price  REAL,
+    sale_id     INTEGER REFERENCES sales(id),
+    note        TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Small key/value store for bot bookkeeping (e.g. when the email watcher started).
+CREATE TABLE IF NOT EXISTS bot_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 
 -- ------------------------------------------------------------ gateway: agent runs + cost
 CREATE TABLE IF NOT EXISTS agent_runs (

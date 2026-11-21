@@ -1,0 +1,42 @@
+# How the sale email watcher (sales/email_watch.py) recognizes marketplace sale emails.
+# No AI: a sender check plus two regular expressions per platform. Restart the bot after edits.
+#
+# An email counts as a sale when ALL of these hold:
+#   1. its From address contains one of `from`
+#   2. its subject matches `sale_subject`
+#   3. its subject does NOT match `not_sale_subject` (likes, offers, price drops, newsletters...)
+#
+# If a real sale email is missed or a non-sale is caught, test the change on the real inbox with
+#   docker-compose exec storebot python sales/email_watch.py --dry-run
+# which prints what it would do and changes nothing.
+# Facebook Marketplace local cash sales send no email: record those with /sold.
+
+[settings]
+# false (start here): every sale email posts a card in #alerts with "Yes, it sold" / "Not a sale",
+#   and the delist alerts start when someone taps Yes.
+# true: a sale email that names the SKU or links to the exact listing is recorded right away and
+#   the delist alerts go out immediately. Matches by title alone always ask first.
+# Turn it on once the cards have been right for a couple of weeks.
+auto_record = false
+poll_minutes = 3        # how often to check the inbox
+lookback_days = 3       # how far back to look on each check (already-seen emails are skipped)
+
+[poshmark]
+from = ["poshmark.com"]
+sale_subject = '(?i)(made a sale|you sold|item (has )?sold|just sold|sold!|congrat\w* .*sold|new order)'
+not_sale_subject = '(?i)(liked|offer (from|to|declined|expired)|counter|price drop|shared|comment|follow|party|bundle|newsletter|weekly|similar|sold out|you might|closet clear|promotion)'
+
+[ebay]
+from = ["ebay.com"]
+sale_subject = '(?i)(you made the sale|you sold|your item sold|item sold|sold:|order (confirmed|received)|ship (your|this) item)'
+not_sale_subject = '(?i)(offer|watch|price drop|recommend|deal|coupon|similar|ending soon|bid|outbid|you won|your order|shipped your|delivered|feedback|survey)'
+
+[mercari]
+from = ["mercari.com"]
+sale_subject = '(?i)(your item sold|item (has )?sold|you sold|made a sale|congrat\w* .*sold)'
+not_sale_subject = '(?i)(liked|offer|price drop|promo|similar|you might|newsletter|smart pricing)'
+
+[depop]
+from = ["depop.com"]
+sale_subject = '(?i)(you sold|item (has )?sold|made a sale|new sale|congrat\w* .*sold)'
+not_sale_subject = '(?i)(liked|offer|price drop|similar|newsletter|you might|follow)'

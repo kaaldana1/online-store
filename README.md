@@ -14,12 +14,15 @@ listing/pricer.py       market price → list price + lowest offer per platform 
 listing/config.toml     step 2 knobs: AI model, price multipliers, min profit, label estimates
 bot/web.py              step 3: storage map web server (http://localhost:8765) + its API
 web/storage.html        step 3: the storage map page (bins, drag & drop, finder)
-automation/          browser worker: Poshmark login, safe check, verified delist, auto-delist worker (see automation/README.md)
 storage/search.py       step 3: finder (keyword index + optional AI pick)
-bot/storage_cmds.py     step 3: /find, /bin, /move, /sold
+bot/storage_cmds.py     step 3: /find, /bin, /move, /sold, /unsold
+sales/email_watch.py    reads marketplace sale emails (IMAP, read-only) and matches them to items. No AI
+sales/email_rules.toml  how sale emails are recognized per site, and the auto_record switch
+sales/sale_record.py    record / undo a sale (used by /sold, /unsold and the email watcher)
+bot/sales_watch.py      runs the email watcher inside the bot and posts its cards in #alerts
 ```
 
-Guides: `SETUP-discord-bot.md` (install), `TESTING.md` (step 1 tests), `STEP2-listing-assistant.md` (step 2), `STEP3-storage-map.md` (step 3).
+Guides: `SETUP-discord-bot.md` (install), `TESTING.md` (step 1 tests), `STEP2-listing-assistant.md` (step 2), `STEP3-storage-map.md` (step 3), `SALES-EMAIL.md` (sale detection from email).
 
 ## Try it (no accounts needed)
 ```bash
@@ -27,6 +30,7 @@ python pricing/fees.py 40 --category jewelry --label 5.50 --cost 3
 python pricing/fees.py --target-net 25 --category jewelry --label 5.50 --cost 3
 python pricing/test_fees.py
 python db/init_db.py --demo
+python sales/test_sales.py
 ```
 
 ## Run the Discord bot
@@ -39,6 +43,6 @@ It runs fine on any always-on machine: an old laptop, a Raspberry Pi, or a ~$5/m
 
 ## How the pieces fit together
 - **Approvals are rows, not chat.** Any agent that wants to post, change a price, or reply to a buyer inserts a row into `approvals`. The bot shows it with Approve and Reject buttons, and a worker applies it only after approval. That keeps "always ask permission" enforced in one place.
-- **Selling one place delists everywhere.** Inserting a row into `sales` fires a database trigger. The trigger creates a delist task for every other live listing of that item. API platforms (eBay) get delisted by a worker. Manual ones (Facebook, Poshmark), and any failed API call, show up in `#alerts` with an @here every 2 hours until someone presses "Done".
+- **Selling one place delists everywhere.** Sales are detected from the marketplaces' sale emails (`SALES-EMAIL.md`) or recorded with `/sold`. Either way a row goes into `sales`, which fires a database trigger. The trigger creates a delist task for every other listing of that item, and each one shows up in `#alerts` with the listing link and the exact steps, re-pinging with @here every 2 hours until someone presses "Done". People do the delisting: nothing logs in to a marketplace (Poshmark bans automation). If the inbox can't be read, `#alerts` says so right away.
 - **Buyer conversations nest item → platform → buyer.** `listings` is one row per item per platform, `buyer_threads` is one row per buyer on that listing, and `offers` and `messages` hang off each buyer. The `best_offers` view ranks every open offer on an item across all platforms by **what you actually keep after fees**, not by the offer amount. Planned Discord layout for step 4: one `#offers` forum post per active item, with one thread per buyer.
 - **Gateway, starting small.** Every AI call gets logged to `agent_runs` with its cost. `spend_this_month` keeps you honest about the $50 budget.
