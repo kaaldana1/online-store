@@ -8,26 +8,9 @@ services:
       - "127.0.0.1:8765:8765"     # storage map: http://localhost:8765 (this computer only)
     volumes:
       - ./data:/app/data           # database lives on the host: store-system/data/store.db
+      # Off-machine backups (optional): uncomment, set the path, and add BACKUP_OFFSITE=/app/offsite to bot/.env
+      # - /mnt/c/Users/YOUR-WINDOWS-NAME/OneDrive/store-backups:/app/offsite
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
-  # Poshmark auto-delist worker (automation/README.md). Starts and restarts with the bot.
-  # Uses the login saved by `python automation/poshmark.py login` (run once on this computer).
-  poshmark-worker:
-    build:
-      context: .
-      dockerfile: automation/Dockerfile
-    container_name: poshmark-worker
-    hostname: poshmark-worker      # fixed name, so Chromium can clean up its own stale profile lock
-    restart: unless-stopped
-    env_file: bot/.env             # AUTO_DELIST, DISCORD_TOKEN, ALERTS_CHANNEL_ID
-    user: "${WORKER_UID:-1000}:${WORKER_GID:-1000}"   # your Linux user, so files stay yours
-    shm_size: "1gb"                # Chromium needs more shared memory than Docker's default
-    init: true                     # a tiny init process, so signals and child processes behave
-    volumes:
-      - ./data:/app/data
-      - ./browser-profiles:/app/browser-profiles
-    logging:
-      driver: json-file
-      options: { max-size: "10m", max-file: "3" }

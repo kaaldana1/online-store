@@ -1,8 +1,10 @@
-"""Step 3 Discord commands: /find, /bin, /move, /sold.
+"""Step 3 Discord commands: /find, /bin, /move, /sold, /unsold.
 
 /sold is the cross-platform safety net: recording a sale marks it sold and the database
-creates a delist task for every OTHER live listing of that item. Those show up in #alerts
-(with re-pings) until someone confirms each one was taken down.
+creates a delist task for every OTHER listing of that item. Those show up in #alerts
+(with re-pings) until someone confirms each one was taken down. Sales on eBay, Poshmark,
+Mercari and Depop are also picked up from their emails (bot/sales_watch.py); Facebook
+cash sales need /sold. /unsold undoes a sale (cancellation, return, no-show).
 """
 from __future__ import annotations
 
@@ -17,22 +19,17 @@ from discord import app_commands
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "storage"))
+sys.path.insert(0, str(ROOT / "sales"))
+import sale_record as sr  # noqa: E402
 import search  # noqa: E402
 
 STORAGE_URL = os.environ.get("STORAGE_URL", "http://localhost:8765")
-NAMES = {"ebay": "eBay", "poshmark": "Poshmark", "facebook": "Facebook"}
-# Platforms with a working automatic-delist worker, from AUTO_DELIST in bot/.env (e.g.
-# AUTO_DELIST=poshmark). Poshmark's worker is automation/poshmark.py and runs on the PC.
-# Anything not listed stays a human task, so nothing can slip through. If a worker is off or
-# stuck, the bot still alerts after 10 minutes.
-def auto_delist() -> set[str]:
-    return {p.strip().lower() for p in os.environ.get("AUTO_DELIST", "").split(",") if p.strip()}
 db = None
 bot = None
 
 
 def _item_by_sku(sku: str):
-    return db.execute("SELECT * FROM items WHERE upper(sku)=upper(?)", (sku.strip(),)).fetchone()
+    return sr.item_by_sku(db, sku)
 
 
 def _photo_file(item_id: int) -> discord.File | None:
@@ -102,49 +99,47 @@ async def move(interaction: discord.Interaction, sku: str, number: int):
 
 
 @app_commands.describe(sku="item SKU, e.g. S0007", platform="where it sold", price="sale price")
-async def sold(interaction: discord.Interaction, sku: str, platform: Literal["ebay", "poshmark", "facebook"],
-               price: float):
+async def sold(interaction: discord.Interaction, sku: str,
+               platform: Literal["ebay", "poshmark", "facebook", "mercari", "depop"], price: float):
     it = _item_by_sku(sku)
     if not it:
         await interaction.response.send_message(f"No item {sku}.")
         return
-    if it["status"] in ("sold", "shipped"):
-        await interaction.response.send_message(f"{it['sku']} is already marked sold.")
+    try:
+        res = sr.record_sale(db, it["id"], platform, price, source="discord")
+    except sr.AlreadySold as e:
+        await interaction.response.send_message(f"{e} If that was wrong, `/unsold {it['sku']}` first.")
         return
-    lst = db.execute("SELECT * FROM listings WHERE item_id=? AND platform_id=?", (it["id"], platform)).fetchone()
-    lid = lst["id"] if lst else db.execute(
-        "INSERT INTO listings (item_id, platform_id, status) VALUES (?,?,'live')", (it["id"], platform)).lastrowid
-    # Listings that were approved but never posted just get closed: nothing to take down.
-    db.execute("UPDATE listings SET status='ended', ended_at=datetime('now') WHERE item_id=? AND id<>? "
-               "AND status IN ('draft','pending_approval','approved')", (it["id"], lid))
-    db.execute("UPDATE approvals SET status='expired' WHERE kind='post_listing' AND ref_id=? AND status='pending'",
-               (it["id"],))
-    db.execute("INSERT INTO sales (item_id, listing_id, sale_price) VALUES (?,?,?)", (it["id"], lid, price))
-    db.commit()   # trigger has now marked it sold and queued delist tasks
-    for t in db.execute("SELECT d.id, l.platform_id FROM delist_tasks d JOIN listings l ON l.id=d.listing_id "
-                        "WHERE d.status IN ('pending','manual_required') AND l.item_id=?", (it["id"],)).fetchall():
-        status = "pending" if t["platform_id"] in auto_delist() else "manual_required"
-        db.execute("UPDATE delist_tasks SET status=? WHERE id=?", (status, t["id"]))
-    db.commit()
-    others = db.execute("SELECT l.platform_id FROM delist_tasks d JOIN listings l ON l.id=d.listing_id "
-                        "JOIN sales s ON s.id=d.reason_sale WHERE s.item_id=? AND d.status!='done'",
-                        (it["id"],)).fetchall()
     where = f" It was in **bin {it['bin_id']}**." if it["bin_id"] is not None else ""
-    if others:
-        AUTO_DELIST = auto_delist()
-        auto = [NAMES.get(o["platform_id"], o["platform_id"]) for o in others if o["platform_id"] in AUTO_DELIST]
-        manual = [NAMES.get(o["platform_id"], o["platform_id"]) for o in others if o["platform_id"] not in AUTO_DELIST]
-        msg = f"💰 {it['sku']} sold on {NAMES[platform]} for ${price:.2f}.{where}"
-        if manual:
-            msg += (f"\n⚠️ Still listed on: **{', '.join(manual)}**. Delist alerts are in #alerts; "
-                    f"tap Done on each once it's removed.")
-        if auto:
-            msg += (f"\n🤖 Removing from **{', '.join(auto)}** automatically. You'll get an alert in "
-                    f"#alerts if that fails or hasn't happened in 10 minutes.")
+    msg = f"💰 {it['sku']} sold on {sr.name(platform)} for ${price:.2f}.{where}"
+    if res.to_remove:
+        msg += (f"\n⚠️ Still listed on: **{', '.join(sr.name(p) for p in res.to_remove)}**. Delist alerts are in "
+                f"#alerts; tap Done on each once it's removed.")
     else:
-        msg = f"💰 {it['sku']} sold on {NAMES[platform]} for ${price:.2f}.{where} No other listings to remove."
+        msg += " No other listings to remove."
     await interaction.response.send_message(msg)
     await bot.post_delist_alerts()
+
+
+@app_commands.describe(sku="item SKU, e.g. S0007", why="optional: cancelled, returned, no-show...")
+async def unsold(interaction: discord.Interaction, sku: str, why: str = ""):
+    it = _item_by_sku(sku)
+    if not it:
+        await interaction.response.send_message(f"No item {sku}.")
+        return
+    try:
+        res = sr.void_sale(db, it["id"], why)
+    except ValueError as e:
+        await interaction.response.send_message(str(e))
+        return
+    msg = f"↩️ {it['sku']} is back on sale (the {sr.name(res.platform)} sale was undone{': ' + why if why else ''})."
+    msg += f"\n• Make sure the **{sr.name(res.platform)}** listing is active again (relist it if the site closed it)."
+    if res.still_up:
+        msg += f"\n• Still up on **{', '.join(sr.name(p) for p in res.still_up)}**: those delist alerts are cancelled."
+    if res.removed:
+        msg += (f"\n• Already removed from **{', '.join(sr.name(p) for p in res.removed)}**: relist there if you want "
+                f"(the copy-paste packet is in the item's listings thread).")
+    await interaction.response.send_message(msg)
 
 
 def register(client, tree: app_commands.CommandTree, database) -> None:
@@ -154,3 +149,4 @@ def register(client, tree: app_commands.CommandTree, database) -> None:
     tree.command(name="bin", description="What's in a bin")(bin_)
     tree.command(name="move", description="Put an item in a bin")(move)
     tree.command(name="sold", description="Record a sale; get alerts to remove it everywhere else")(sold)
+    tree.command(name="unsold", description="Undo a sale: cancelled, returned, or a no-show")(unsold)

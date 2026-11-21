@@ -20,6 +20,7 @@ import tomllib
 import urllib.parse
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import discord
 from discord import app_commands
@@ -85,6 +86,22 @@ def _num(s: str | None, default: float | None = None) -> float | None:
     if s is None or not s.strip():
         return default
     return float(s.strip().replace("$", "").replace(",", ""))
+
+
+def spot_prices() -> tuple[dict, str]:
+    """Spot prices set with /spot, plus a warning when they're older than stale_after_days."""
+    spot, note = {}, ""
+    stale = CFG["pricing"]["melt"].get("stale_after_days", 7)
+    for metal in ("silver", "gold"):
+        r = db.execute("SELECT value FROM bot_state WHERE key=?", (f"spot_{metal}",)).fetchone()
+        if not r:
+            continue
+        price, _, when = r["value"].partition("@")
+        spot[metal] = float(price)
+        old = db.execute("SELECT julianday('now') - julianday(?) > ?", (when, stale)).fetchone()[0]
+        if old:
+            note = f" (⚠️ spot price is from {when[:10]}, update it with /spot)"
+    return spot, note
 
 
 # ------------------------------------------------------------ /newitem
@@ -191,7 +208,10 @@ class PriceModal(discord.ui.Modal):
                                            default=f"{(item['weight_oz'] or 16) / 16:g}")
         self.cost = discord.ui.TextInput(label="What you paid ($)", max_length=10,
                                          default=f"{item['cost_basis'] or 0:g}")
-        for t in (self.typical, self.range, self.weight, self.cost):
+        self.metal = discord.ui.TextInput(label="Sterling/gold weight + purity, optional",
+                                          placeholder="e.g. 31g 925 or 4.2g 14k (sets a melt-value floor)",
+                                          required=False, max_length=30, default=load_meta(item_id).get("metal_text"))
+        for t in (self.typical, self.range, self.weight, self.cost, self.metal):
             self.add_item(t)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -206,6 +226,12 @@ class PriceModal(discord.ui.Modal):
             await interaction.response.send_message("Couldn't read those numbers. Use plain numbers like 40 or 30-55.",
                                                     ephemeral=True)
             return
+        try:
+            metal = pricer.parse_metal(self.metal.value)
+        except ValueError as e:
+            await interaction.response.send_message(f"Couldn't read the metal weight ({e}). Try `31g 925` or `4.2g 14k`, "
+                                                    f"or leave it blank.", ephemeral=True)
+            return
         item = db.execute("SELECT * FROM items WHERE id=?", (self.item_id,)).fetchone()
         db.execute("UPDATE items SET cost_basis=?, weight_oz=?, status='drafted' WHERE id=?",
                    (cost, weight * 16, self.item_id))
@@ -216,8 +242,21 @@ class PriceModal(discord.ui.Modal):
             db.execute("INSERT INTO appraisals (item_id, price_low, price_median, price_high, method) "
                        "VALUES (?,?,?,?, 'manual_comps')", (self.item_id, lo, market, hi))
 
-        plans = pricer.plan(market, category=item["category"] or "default", cost=cost, weight_lb=weight)
+        spot, spot_note = spot_prices()
+        meta = load_meta(self.item_id)
+        meta["metal_text"] = (self.metal.value or "").strip() or None
+        db.execute("UPDATE appraisals SET keywords=? WHERE item_id=? AND id=(SELECT MAX(id) FROM appraisals WHERE item_id=?)",
+                   (json.dumps(meta), self.item_id, self.item_id))
+        plans = pricer.plan(market, low=lo, high=hi, category=item["category"] or "default", cost=cost,
+                            weight_lb=weight, metal=metal, spot=spot)
         lines, payload = [], []
+        melt = pricer.melt_floor(metal, spot)
+        if metal and melt is None:
+            lines.append(f"⚠️ No {metal.metal} spot price set, so there's no melt floor. Set one with `/spot`.")
+        elif melt is not None:
+            lines.append(f"🪙 Melt floor ${melt:.0f} ({metal.label()}){spot_note}")
+            if pricer.under_melt(market, metal, spot):
+                lines.append("⚠️ Typical comps sell **below melt value**: consider selling it as a lot or to a refiner.")
         for p in plans:
             name = PLATFORM_NAMES.get(p.platform, p.platform)
             if p.skip_reason:
@@ -226,7 +265,8 @@ class PriceModal(discord.ui.Modal):
                            (p.list_price, p.est_net, self.item_id, p.platform))
                 continue
             lines.append(f"• **{name}**: list **${p.list_price:.0f}** · accept offers ≥ ${p.floor_price:.0f} · "
-                         f"profit ≈ ${p.est_net:.2f}")
+                         f"expected profit ≈ ${p.expected_net:.2f} (${p.est_net:.2f} at full price)"
+                         + (f" · {'; '.join(p.notes)}" if p.notes else ""))
             payload.append(p.__dict__)
             db.execute("UPDATE listings SET status='pending_approval', list_price=?, floor_price=?, est_net=? "
                        "WHERE item_id=? AND platform_id=?",
@@ -339,7 +379,7 @@ class MarkPostedButton(discord.ui.DynamicItem[discord.ui.Button], template=r"pos
         if r["status"] == "live":
             await interaction.response.send_message("Already marked posted.", ephemeral=True)
             return
-        # Ask for the listing's link: auto-delist needs it to find the listing after a sale.
+        # Ask for the listing's link: delist alerts and sale-email matching use it.
         await interaction.response.send_modal(PostedLinkModal(self.listing_id, r["sku"], r["platform_id"]))
 
 
@@ -349,7 +389,7 @@ class PostedLinkModal(discord.ui.Modal):
         self.listing_id = listing_id
         self.link = discord.ui.TextInput(
             label="Listing link (paste it from the site)", required=False, max_length=500,
-            placeholder="https://... (needed for automatic delisting)")
+            placeholder="https://... (puts the link in delist alerts)")
         self.add_item(self.link)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -362,7 +402,7 @@ class PostedLinkModal(discord.ui.Modal):
         db.commit()
         n, goal = posted_today(), CFG["goal"]["listings_per_day"]
         await interaction.response.edit_message(view=None)
-        note = "" if url else " (no link saved, so this one will need a manual delist when it sells elsewhere)"
+        note = "" if url else " (no link saved, so a delist alert for it won't have a link)"
         await interaction.followup.send(
             f"📤 {r['sku']} posted on {PLATFORM_NAMES.get(r['platform_id'], r['platform_id'])} by "
             f"{interaction.user.display_name}{note}. Today: **{n}/{goal}** items listed" + (" 🎉" if n >= goal else "."))
@@ -374,8 +414,34 @@ async def today(interaction: discord.Interaction):
     waiting = db.execute("SELECT COUNT(*) FROM approvals WHERE status='pending'").fetchone()[0]
     unpriced = db.execute("SELECT COUNT(*) FROM items WHERE status IN ('sourced','appraised')").fetchone()[0]
     bar = "🟩" * min(n, goal) + "⬜" * max(goal - n, 0)
+    msg = f"**Today:** {bar} {n}/{goal} items listed\nWaiting for approval: {waiting} · drafted but not priced: {unpriced}"
+    # Approved packets nobody marked posted: either post them, or tap Mark posted if they're already up
+    # (otherwise a sale elsewhere can't be matched and the alert has no link).
+    unposted = db.execute("SELECT i.sku, GROUP_CONCAT(l.platform_id, ', ') AS where_ FROM listings l "
+                          "JOIN items i ON i.id=l.item_id WHERE l.status='approved' AND i.status NOT IN ('sold','shipped') "
+                          "GROUP BY i.id ORDER BY i.id").fetchall()
+    if unposted:
+        msg += ("\n📤 Approved but not marked posted: " +
+                ", ".join(f"`{r['sku']}` ({r['where_']})" for r in unposted[:15]) +
+                ("…" if len(unposted) > 15 else "") + "\nPost them, or tap **Mark posted** in their thread if they're up.")
+    ship = db.execute("SELECT COUNT(*) FROM items WHERE status='sold'").fetchone()[0]
+    if ship:
+        msg += f"\n📦 {ship} sold item{'' if ship == 1 else 's'} to ship: `/toship`"
+    if hasattr(bot, "inbox_status"):
+        msg += "\n" + bot.inbox_status()
+    await interaction.response.send_message(msg[:2000])
+
+
+@app_commands.describe(metal="silver or gold", usd_per_troy_oz="today's spot price per troy ounce")
+async def spot(interaction: discord.Interaction, metal: Literal["silver", "gold"], usd_per_troy_oz: float):
+    db.execute("INSERT INTO bot_state (key, value) VALUES (?, ? || '@' || datetime('now')) "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (f"spot_{metal}", str(usd_per_troy_oz)))
+    db.commit()
+    payout = CFG["pricing"]["melt"]["dealer_payout"]
+    per_g = usd_per_troy_oz / pricer.TROY_OZ_G * (0.925 if metal == "silver" else 0.585) * payout
     await interaction.response.send_message(
-        f"**Today:** {bar} {n}/{goal} items listed\nWaiting for approval: {waiting} · drafted but not priced: {unpriced}")
+        f"🪙 {metal.title()} spot set to ${usd_per_troy_oz:.2f}/ozt. Melt floor ≈ ${per_g:.2f} per gram of "
+        f"{'sterling' if metal == 'silver' else '14k'} (at {payout:.0%} dealer payout).")
 
 
 async def spend(interaction: discord.Interaction):
@@ -396,5 +462,6 @@ def register(client, tree: app_commands.CommandTree, database, hooks: dict) -> N
                               bin="storage bin number")(newitem))
     tree.command(name="today", description="Progress toward today's listing goal")(today)
     tree.command(name="spend", description="AI spend this month")(spend)
+    tree.command(name="spot", description="Set today's silver or gold spot price (for melt-value floors)")(spot)
     hooks[("post_listing", "approved")] = on_listing_approved
     hooks[("post_listing", "rejected")] = on_listing_rejected

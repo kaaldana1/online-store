@@ -23,6 +23,7 @@ if a.clean:
     ids = [r[0] for r in con.execute("SELECT id FROM items WHERE sku LIKE 'TEST-%'")]
     for i in ids:
         con.execute("DELETE FROM delist_tasks WHERE listing_id IN (SELECT id FROM listings WHERE item_id=?)", (i,))
+        con.execute("DELETE FROM email_events WHERE item_id=?", (i,))
         con.execute("DELETE FROM sales WHERE item_id=?", (i,))
         con.execute("DELETE FROM items WHERE id=?", (i,))
     con.commit()
@@ -33,7 +34,7 @@ elif a.alert:
                        (f"TEST-{n:03d}", "TEST sterling cuff bracelet")).lastrowid
     ids = {p: con.execute("INSERT INTO listings (item_id, platform_id, status, list_price) VALUES (?,?,'live',45)",
                           (item, p)).lastrowid for p in ("ebay", "facebook", "poshmark")}
-    con.execute("INSERT INTO sales (item_id, listing_id, sale_price) VALUES (?,?,45)", (item, ids["ebay"]))
+    con.execute("INSERT INTO sales (item_id, listing_id, sale_price, source) VALUES (?,?,45,'test')", (item, ids["ebay"]))
     con.commit()
     print(f"Fake sale of TEST-{n:03d} on eBay. Watch #alerts for Facebook + Poshmark delist alerts.")
 else:

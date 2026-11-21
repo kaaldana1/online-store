@@ -5,8 +5,11 @@ What it does now:
   * /pending  re-posts every approval that is still waiting
   * Posts each new row in `approvals` to #approvals with Approve / Reject buttons.
     The buttons survive bot restarts.
-  * Posts every delist task that failed or needs a manual step to #alerts with a
+  * Posts every delist task to #alerts with the listing link, the exact steps, and a
     "Done, I delisted it" button, and re-pings every 2 hours until someone presses it.
+    Every delist is done by a person; nothing logs in to a marketplace.
+  * Watches the sales inbox for marketplace sale emails (bot/sales_watch.py).
+  * Daily "to ship" digest and nightly database backup (bot/ops.py).
 
 Later steps plug in by inserting rows into `approvals` / `delist_tasks`. The bot never
 posts, prices, or replies on a platform by itself.
@@ -14,7 +17,7 @@ posts, prices, or replies on a platform by itself.
 Env vars (put them in bot/.env, see .env.example):
   DISCORD_TOKEN, GUILD_ID, APPROVALS_CHANNEL_ID, ALERTS_CHANNEL_ID, ANTHROPIC_API_KEY
 Step 2 commands (/newitem, /today, /spend) live in bot/listing_ui.py.
-Step 3: /find, /bin, /move, /sold in bot/storage_cmds.py; storage map web page in bot/web.py.
+Step 3: /find, /bin, /move, /sold, /unsold in bot/storage_cmds.py; storage map web page in bot/web.py.
 """
 from __future__ import annotations
 
@@ -31,10 +34,14 @@ from discord.ext import tasks
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "pricing"))
 sys.path.insert(0, str(ROOT / "db"))
+sys.path.insert(0, str(ROOT / "sales"))
 import fees as feecalc  # noqa: E402
+import sale_record as sr  # noqa: E402
 from init_db import connect, init  # noqa: E402
 import listing_ui  # noqa: E402  (step 2: /newitem, prices, packets)
-import storage_cmds  # noqa: E402  (step 3: /find, /bin, /move, /sold)
+import sales_watch  # noqa: E402  (sale emails → sales, with alerts)
+import ops  # noqa: E402  (/toship, /shipped, /export, daily ship digest, nightly backup)
+import storage_cmds  # noqa: E402  (step 3: /find, /bin, /move, /sold, /unsold)
 import web  # noqa: E402  (step 3: storage map at http://localhost:8765)
 
 
@@ -112,6 +119,9 @@ class DelistDoneButton(discord.ui.DynamicItem[discord.ui.Button],
 
     async def callback(self, interaction: discord.Interaction):
         db.execute("UPDATE delist_tasks SET status='done', done_at=datetime('now') WHERE id=?", (self.task_id,))
+        db.execute("UPDATE listings SET status='ended', ended_at=datetime('now') "
+                   "WHERE id=(SELECT listing_id FROM delist_tasks WHERE id=?) AND status IN ('live','approved','delist_failed')",
+                   (self.task_id,))
         db.commit()
         await interaction.response.edit_message(content=f"✅ Delisted (confirmed by {interaction.user.display_name})",
                                                 embed=None, view=None)
@@ -146,6 +156,8 @@ class StoreBot(discord.Client):
         else:
             await self.tree.sync()
         self.watch.start()
+        sales_watch.start()
+        ops.start()
         try:
             self.web = await web.start(db, port=int(os.environ.get("WEB_PORT", 8765)))
         except OSError as e:
@@ -180,7 +192,8 @@ class StoreBot(discord.Client):
             return
         now = datetime.now(timezone.utc)
         rows = db.execute("""
-            SELECT d.id, d.status, d.last_error, l.platform_id, l.url, i.sku, i.name, p.name AS pname
+            SELECT d.id, d.status, d.last_error, l.platform_id, l.url, l.status AS lstatus, l.title,
+                   i.sku, i.name, i.bin_id, p.name AS pname
             FROM delist_tasks d JOIN listings l ON l.id=d.listing_id
             JOIN items i ON i.id=l.item_id JOIN platforms p ON p.id=l.platform_id
             WHERE d.status IN ('failed','manual_required')
@@ -189,12 +202,23 @@ class StoreBot(discord.Client):
             last = self.last_ping.get(r["id"])
             if last and now - last < REPING_EVERY:
                 continue
-            why = {"manual_required": "needs a manual delist",
-                   "pending": "automatic delist hasn't happened after 10 minutes"}.get(
-                       r["status"], f"automatic delist FAILED: {r['last_error'] or 'unknown error'}")
+            why = {"manual_required": "is still listed there. Take it down now",
+                   "pending": "is waiting on an automatic step that hasn't happened after 10 minutes. "
+                              "Take it down by hand"}.get(
+                       r["status"], f"couldn't be removed automatically ({r['last_error'] or 'unknown error'}). "
+                                    f"Take it down by hand")
+            if r["lstatus"] == "approved":
+                why = why.replace("is still listed there", "may be listed there")
+            lines = [f"**{r['name'] or r['sku']}** {why}."]
+            if r["lstatus"] == "approved":
+                lines.append("It was approved but never marked posted. If you didn't post it there, just tap Done.")
+            lines.append(f"🔗 {r['url']}" if r["url"] else
+                         f"No link saved: search your {r['pname']} listings for **{r['sku']}** "
+                         f"or “{(r['title'] or r['name'] or '')[:60]}”.")
+            if r["platform_id"] in sr.DELIST_STEPS:
+                lines.append(f"**How:** {sr.DELIST_STEPS[r['platform_id']]}")
             e = discord.Embed(title=f"⚠️ SOLD: remove {r['sku']} from {r['pname']}",
-                              description=f"**{r['name'] or r['sku']}** {why}.\n{r['url'] or ''}",
-                              color=discord.Color.red())
+                              description="\n".join(lines), color=discord.Color.red())
             v = discord.ui.View(timeout=None)
             v.add_item(DelistDoneButton(r["id"]))
             await ch.send(content="@here" if last else None, embed=e, view=v)
@@ -204,6 +228,9 @@ class StoreBot(discord.Client):
 bot = StoreBot()
 listing_ui.register(bot, bot.tree, db, HOOKS)
 storage_cmds.register(bot, bot.tree, db)
+sales_watch.register(bot, db, ALERTS_CH)
+ops.register(bot, bot.tree, db, ALERTS_CH)
+bot.inbox_status = sales_watch.status_line
 
 
 @bot.tree.command(description="Compare fees and profit across platforms for a price")
@@ -230,6 +257,18 @@ async def pending(interaction: discord.Interaction):
     await interaction.response.send_message(f"{len(rows)} waiting:")
     for row in rows:
         await interaction.followup.send(embed=approval_embed(row), view=approval_view(row["id"]))
+
+
+@bot.tree.command(description="Is the sales inbox being checked? Checks it right now")
+async def inbox(interaction: discord.Interaction):
+    if sales_watch.ew.ImapConfig.from_env() is None:
+        await interaction.response.send_message(sales_watch.status_line() +
+                                                "\nSet EMAIL_ADDRESS and EMAIL_APP_PASSWORD in bot/.env to turn it on.")
+        return
+    await interaction.response.defer(thinking=True)
+    n = await sales_watch.poll_once()
+    head = "Checked just now: " + (f"{n} new marketplace email{'' if n == 1 else 's'}." if n >= 0 else "FAILED.")
+    await interaction.followup.send(f"{head}\n{sales_watch.status_line()}")
 
 
 if __name__ == "__main__":

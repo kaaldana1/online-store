@@ -7,8 +7,8 @@ Photo in, ready-to-paste listings out. The bot never posts, prices, or messages 
 1. **`/newitem`** in any channel (`#new-items` is a good home). Attach the main photo, plus up to 2 more (hallmark, label, flaw). Optionally add notes ("925 stamp, small dent"), what she paid, and the bin number.
 2. Within ~15 seconds the bot replies with an **intake card**: SKU (e.g. `S0007`), what it thinks the item is, condition, estimated weight, and **⚠️ checks** like "photograph the clasp hallmark".
 3. She taps **🔎 eBay sold prices** (or Poshmark sold). That opens real sold listings for the AI's search phrase, and she eyeballs the typical price.
-4. She taps **💲 Enter prices** and types the typical sold price (plus an optional range). Weight and cost come prefilled.
-5. The bot works out each platform's list price, lowest offer to accept, and profit after fees. It skips any platform under the minimum profit, then posts the item to **#approvals**.
+4. She taps **💲 Enter prices** and types the typical sold price, the sold range (low-high, recommended), and for sterling or gold the weight and purity (e.g. `31g 925`). Weight and cost come prefilled.
+5. The bot works out each platform's list price, lowest offer to accept, and expected profit after fees and packaging, at the share of list she usually gets. Sterling and gold are never priced under melt value (set the spot price with `/spot silver 31.20`). It skips any platform under the minimum profit, then posts the item to **#approvals**.
 6. She taps **Approve**. A thread opens with one **copy-paste packet per platform** (title, price, tags, description in grey boxes; long-press to copy).
 7. After posting on each site, she taps **📤 Mark posted**. The bot replies "Today: 3/5 items listed".
 
@@ -51,8 +51,10 @@ What I could and couldn't test here: the whole flow ran end to end with a simula
 
 ## Tuning (`listing/config.toml`)
 
-- `multiplier`: list price vs. market per platform (Poshmark ×1.15 for offer room, Facebook ×0.90 for quick local cash).
-- `min_profit` ($5) skips a platform below it. `keep_fraction` (0.75) sets the lowest acceptable offer.
+- `list_at` / `floor_at`: where in the sold range each platform lists and its lowest offer (eBay and Facebook list at the typical price, Poshmark at the top with the floor at the typical price, Facebook's floor at the bottom).
+- `realization`: share of list she usually gets (eBay 0.93, Poshmark 0.85, Facebook 0.85). Platforms are ranked by profit at that price. Replace the numbers with her own after 30-50 sales.
+- `packaging` ($1 per shipped order), `melt.dealer_payout` (0.80), `min_profit` ($5), `keep_fraction` (0.75, eBay's floor).
+- `[shipping] ship_within_days`: deadlines for the daily "to ship" digest.
 - `label_estimate`: rough shipping by weight, used for eBay's fee on shipping.
 - `model` / `effort`: the AI model. With the resale-lister skill, Opus 5.5 at low effort costs roughly 8–15¢ per item (the skill's instructions are cached, so items done within 5 minutes of each other are cheaper), about $12–22/month at 5 a day. `/spend` shows the real number. `claude-haiku-5-5` is much cheaper if its drafts are good enough.
 - `web_search` / `max_web_searches`: lets Claude look up maker's marks, flatware patterns, Coach style numbers and RN numbers (never prices), up to 3 searches per item at 1¢ each.

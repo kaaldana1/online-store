@@ -12,7 +12,7 @@
   - `/bin 4` shows what's in bin 4.
   - `/move S0007 4` puts an item in bin 4 (`0` takes it out).
   - `/sold S0007 poshmark 48` records a sale and tells you which bin it's in. **Every other platform it's still live on gets a red alert in #alerts** that re-pings every 2 hours until someone taps Done. Listings that were approved but never posted are simply closed.
-- **Safety net:** any automatic delist that hasn't happened within 10 minutes also raises an alert. Right now every delist is a human task. eBay becomes automatic once its API is approved.
+- **Safety net:** every delist is a human task with the link and steps in the alert. Sales on eBay, Poshmark, Mercari and Depop are also detected from their emails (see `SALES-EMAIL.md`), and `/unsold` undoes a sale.
 
 ## Setup
 1. Copy into `~/store-system/` (keep folders):
