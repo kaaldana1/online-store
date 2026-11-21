@@ -8,6 +8,8 @@ services:
       - "127.0.0.1:8765:8765"     # storage map: http://localhost:8765 (this computer only)
     volumes:
       - ./data:/app/data           # database lives on the host: store-system/data/store.db
+      # Off-machine backups (optional): uncomment, set the path, and add BACKUP_OFFSITE=/app/offsite to bot/.env
+      # - /mnt/c/Users/YOUR-WINDOWS-NAME/OneDrive/store-backups:/app/offsite
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }

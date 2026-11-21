@@ -296,6 +296,49 @@ def test_watcher_alerts_when_inbox_fails_and_when_it_recovers():
     assert "readable again" in ch.sent[-1]
 
 
+# ------------------------------------------------------------ ops: to ship, backup, export
+def test_to_ship_backup_and_export(tmp=None):
+    import tempfile
+    import ops
+    db = fresh_db()
+    iid = add_item(db)
+    db.execute("UPDATE items SET cost_basis=3, category='jewelry', bin_id=NULL WHERE id=?", (iid,))
+    fb = add_item(db, "S0050", "Something local", pm_id="b" * 24, ebay_id="111111111111")
+    sr.record_sale(db, iid, "poshmark", 48)
+    sr.record_sale(db, fb, "facebook", 20)
+    db.execute("UPDATE sales SET sold_at=datetime('now','-10 days') WHERE item_id=?", (iid,))
+    db.commit()
+    ship = ops.to_ship(db)
+    assert [x["sku"] for x in ship] == ["S0042"] and ship[0]["overdue"]      # Facebook pickups aren't shipped
+    assert "OVERDUE" in ops.ship_lines(ship)[0]
+
+    text, n, total = ops.sales_csv(db, int(db.execute("SELECT strftime('%Y', sold_at) FROM sales").fetchone()[0]))
+    assert n == 2 and total == 68.0
+    posh = [r for r in text.splitlines() if "S0042" in r][0].split(",")
+    assert posh[5] == "9.60" and posh[7] == "3.00", posh                    # 20% Poshmark fee, cost basis
+    sr.void_sale(db, fb)
+    assert ops.sales_csv(db, int(posh[0][:4]))[1] == 1                      # undone sales are left out
+
+    with tempfile.TemporaryDirectory() as d:
+        ops.BACKUPS = Path(d) / "backups"
+        off = Path(d) / "off"
+        off.mkdir()
+        import os
+        os.environ["BACKUP_OFFSITE"] = str(off)
+        written = ops.backup(db)
+        copy = sqlite3.connect(written[0])
+        assert copy.execute("SELECT COUNT(*) FROM sales").fetchone()[0] == 2
+        assert (off / written[0].name).exists()
+        os.environ["BACKUP_OFFSITE"] = str(Path(d) / "missing")
+        try:
+            ops.backup(db)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("a missing offsite folder must fail loudly")
+        del os.environ["BACKUP_OFFSITE"]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

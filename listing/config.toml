@@ -23,23 +23,56 @@ pickup_area = ""
 listings_per_day = 5
 tz_offset_hours = -7          # Arizona (no daylight saving). Used for "today" counts.
 
+[shipping]
+# Days after a sale to get it in the mail, for the daily "to ship" digest. eBay: your handling time
+# (it counts toward seller metrics). Poshmark: buyers can cancel after about 7 days (verify in the app).
+ship_within_days = { ebay = 2, poshmark = 5, mercari = 3, depop = 3 }
+
 [pricing]
 # The "market price" is the typical SOLD price your mom enters from the comps link.
 min_profit = 5.00             # skip a platform if it would net less than this
 round_to_dollar = true        # $43.27 -> $43
 
-# List price = market price x multiplier, per platform.
-#   eBay: list at market.
-#   Poshmark: list higher, because buyers expect to make offers.
-#   Facebook (local): a bit under market, since it's a quick cash sale with no fees.
-[pricing.multiplier]
-ebay = 1.00
-poshmark = 1.15
-facebook = 0.90
+# Where each platform lists, using the sold range she enters (low-high) and the typical price:
+#   "median" = the typical sold price, "high" = top of the range, "low" = bottom of the range.
+# eBay at the median; Poshmark near the top because buyers always offer; Facebook at the median.
+[pricing.list_at]
+ebay = "median"
+poshmark = "high"
+facebook = "median"
 
-# Lowest offer to accept = the price that still nets this fraction of the list-price profit.
+# Lowest offer to accept, same words, plus "keep" = the price that still nets keep_fraction of
+# the list-price profit. Never below min_profit or the melt floor.
+[pricing.floor_at]
+ebay = "keep"
+poshmark = "median"
+facebook = "low"
+
+# No range entered? "high" falls back to typical x this, and "low" to typical x low_fallback.
+[pricing.multiplier]
+poshmark = 1.15
+low_fallback = 0.85
+
 [pricing.floor]
 keep_fraction = 0.75
+
+# Share of the list price she usually ends up getting (offers, bundles). Platforms are ranked by
+# profit at this price, not at list. Starting guesses from the review. Replace them with her real
+# numbers after 30-50 sales.
+[pricing.realization]
+ebay = 0.93
+poshmark = 0.85
+facebook = 0.85
+
+# Box, mailer, tape, tissue per shipped order. Not charged on Facebook local pickup.
+[pricing.packaging]
+usd = 1.00
+
+# Melt-value floor for sterling and gold: grams / 31.1035 x purity x spot x dealer payout.
+# Spot prices are set in Discord with /spot (e.g. /spot silver 31.20) and are flagged when stale.
+[pricing.melt]
+dealer_payout = 0.80
+stale_after_days = 7
 
 # Estimated shipping label by packed weight (rough USPS Ground Advantage). Edit to match reality.
 [[pricing.label_estimate]]

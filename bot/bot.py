@@ -9,6 +9,7 @@ What it does now:
     "Done, I delisted it" button, and re-pings every 2 hours until someone presses it.
     Every delist is done by a person; nothing logs in to a marketplace.
   * Watches the sales inbox for marketplace sale emails (bot/sales_watch.py).
+  * Daily "to ship" digest and nightly database backup (bot/ops.py).
 
 Later steps plug in by inserting rows into `approvals` / `delist_tasks`. The bot never
 posts, prices, or replies on a platform by itself.
@@ -39,6 +40,7 @@ import sale_record as sr  # noqa: E402
 from init_db import connect, init  # noqa: E402
 import listing_ui  # noqa: E402  (step 2: /newitem, prices, packets)
 import sales_watch  # noqa: E402  (sale emails → sales, with alerts)
+import ops  # noqa: E402  (/toship, /shipped, /export, daily ship digest, nightly backup)
 import storage_cmds  # noqa: E402  (step 3: /find, /bin, /move, /sold, /unsold)
 import web  # noqa: E402  (step 3: storage map at http://localhost:8765)
 
@@ -155,6 +157,7 @@ class StoreBot(discord.Client):
             await self.tree.sync()
         self.watch.start()
         sales_watch.start()
+        ops.start()
         try:
             self.web = await web.start(db, port=int(os.environ.get("WEB_PORT", 8765)))
         except OSError as e:
@@ -226,6 +229,8 @@ bot = StoreBot()
 listing_ui.register(bot, bot.tree, db, HOOKS)
 storage_cmds.register(bot, bot.tree, db)
 sales_watch.register(bot, db, ALERTS_CH)
+ops.register(bot, bot.tree, db, ALERTS_CH)
+bot.inbox_status = sales_watch.status_line
 
 
 @bot.tree.command(description="Compare fees and profit across platforms for a price")
